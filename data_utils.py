@@ -121,6 +121,83 @@ class DataProcessor:
         
         return country_summary
 
+    @staticmethod
+    def convert_balances_to_jpy(df_balances: pd.DataFrame, df_fx_rates: pd.DataFrame) -> pd.DataFrame:
+        """残高を日本円に換算した列 `残高JPY` を追加した DataFrame を返す。
+        ・JPY の場合はレート1固定
+        ・それ以外は 同日付かつ <通貨>/JPY のレートを掛け合わせる
+        """
+        if df_balances.empty:
+            return df_balances.copy()
+
+        df = df_balances.copy()
+        # 既に JPY 換算済みならスキップ
+        if '残高JPY' in df.columns:
+            return df
+
+        # レート情報がない場合はそのまま返却
+        if df_fx_rates is None or df_fx_rates.empty:
+            df['残高JPY'] = df['残高']
+            return df
+
+        # 日付を datetime に統一
+        if '日付' in df_fx_rates.columns and df_fx_rates['日付'].dtype != 'datetime64[ns]':
+            df_fx_rates = df_fx_rates.copy()
+            df_fx_rates['日付'] = pd.to_datetime(df_fx_rates['日付'])
+
+        # 通貨ペアから base 通貨抽出 (XXX/JPY)
+        fx_jpy = df_fx_rates[df_fx_rates['通貨ペア'].str.endswith('/JPY')].copy()
+        fx_jpy['通貨'] = fx_jpy['通貨ペア'].str.split('/').str[0]
+
+        # マージキー準備
+        df_merge = df.merge(
+            fx_jpy[['日付', '通貨', 'レート']],
+            how='left',
+            left_on=['日付', '通貨'],
+            right_on=['日付', '通貨']
+        )
+
+        # JPY はレート1
+        df_merge['レート'].fillna(1.0, inplace=True)
+
+        df_merge['残高JPY'] = df_merge['残高'] * df_merge['レート']
+        return df_merge
+
+    @staticmethod
+    def add_region_column(df_balances: pd.DataFrame) -> pd.DataFrame:
+        """国コードを大陸 / 地域名にマッピングした `地域` 列を追加"""
+        if df_balances.empty:
+            return df_balances
+
+        # 既に地域列があればスキップ
+        if '地域' in df_balances.columns:
+            return df_balances
+
+        region_map = {
+            'JPN': 'Asia',
+            'CHN': 'Asia',
+            'KOR': 'Asia',
+            'USA': 'North America',
+            'CAN': 'North America',
+            'MEX': 'North America',
+            'DEU': 'Europe',
+            'FRA': 'Europe',
+            'GBR': 'Europe',
+            'ESP': 'Europe',
+            'ITA': 'Europe',
+            'AUS': 'Oceania',
+            'NZL': 'Oceania',
+            'BRA': 'South America',
+            'ARG': 'South America',
+            'ZAF': 'Africa',
+        }
+        df = df_balances.copy()
+        if '国コード' in df.columns:
+            df['地域'] = df['国コード'].map(region_map).fillna('Other')
+        else:
+            df['地域'] = 'Other'
+        return df
+
 class Visualizer:
     """ビジュアライゼーション用のクラス"""
     
@@ -391,5 +468,22 @@ class Visualizer:
         )])
 
         fig.update_layout(title_text="国間資金フロー", font_size=10, height=600)
+        return fig
+
+    @staticmethod
+    def create_bar_chart(df: pd.DataFrame, x_col: str, y_col: str, title: str, orientation: str = 'v') -> go.Figure:
+        """汎用バーグラフ作成関数"""
+        if df.empty:
+            return go.Figure()
+
+        fig = px.bar(
+            df,
+            x=x_col if orientation == 'v' else y_col,
+            y=y_col if orientation == 'v' else x_col,
+            orientation=orientation,
+            text_auto='.2s',
+            title=title,
+        )
+        fig.update_layout(height=400, showlegend=False)
         return fig
 

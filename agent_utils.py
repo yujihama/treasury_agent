@@ -96,44 +96,72 @@ class TreasuryAgent:
             return
         
         try:
-            # 複数のDataFrameを統合してPandasエージェントを作成
-            main_df = None
-            df_info = []
-            
+            # ------------------------------------------------------------
+            # すべての DataFrame をリストにまとめ、Pandas エージェントへ渡す
+            # ------------------------------------------------------------
+            dfs: list[pd.DataFrame] = []  # create_pandas_dataframe_agent へ渡す DF のリスト
+
+            main_df: Optional[pd.DataFrame] = None  # 日付ソートなどの代表 DF
+            df_info: list[str] = []  # プレフィックスに挿入するデータ概要
+
+            # balances
             if 'balances' in self.dataframes:
-                main_df = self.dataframes['balances'].copy()
+                df_balances = self.dataframes['balances'].copy()
+                dfs.append(df_balances)
+                if main_df is None:
+                    main_df = df_balances
+
                 df_info.append("Balance Data(df): Date, Account ID, Bank Name, Currency, Balance, Country, Country Code")
-                
+
                 # データの詳細情報を追加
-                countries = main_df['国名'].unique() if '国名' in main_df.columns else []
+                countries = df_balances['国名'].unique() if '国名' in df_balances.columns else []
                 df_info.append(f"Available Countries: {', '.join(countries)}")
-                df_info.append(f"Total Data Count: {len(main_df)}")
-                
+                df_info.append(f"Total Data Count: {len(df_balances)}")
+
                 # 国別データ数を追加
-                if '国名' in main_df.columns:
-                    country_counts = main_df['国名'].value_counts()
+                if '国名' in df_balances.columns:
+                    country_counts = df_balances['国名'].value_counts()
                     country_info = [f"{country}: {count}件" for country, count in country_counts.items()]
                     df_info.append(f"Country-wise Data Count: {', '.join(country_info)}")
-            
-            if main_df is None and 'transactions' in self.dataframes:
-                main_df = self.dataframes['transactions'].copy()
-                df_info.append("Transaction Data(df): Date, Account ID, Transaction ID, Transaction Type, Amount, Summary, Counterpart Country, Counterpart Country Code")
-            
-            if main_df is None:
+
+            # transactions
+            if 'transactions' in self.dataframes:
+                df_transactions = self.dataframes['transactions'].copy()
+                dfs.append(df_transactions)
+                if main_df is None:
+                    main_df = df_transactions
+
+                df_info.append("Transaction Data(df1): Date, Account ID, Transaction ID, Transaction Type, Amount, Summary, Counterpart Country, Counterpart Country Code")
+
+            # budgets
+            if 'budgets' in self.dataframes:
+                df_budgets = self.dataframes['budgets'].copy()
+                dfs.append(df_budgets)
+                df_info.append("Budget Data(df2): Date, Account ID, Budget Amount, Currency, Country, Country Code")
+
+            # fx_rates
+            if 'fx_rates' in self.dataframes:
+                df_fx = self.dataframes['fx_rates'].copy()
+                dfs.append(df_fx)
+                df_info.append("FX Rate Data(df3): Date, Base Currency, Quote Currency, Rate")
+
+            # データが 1 件も無い場合はエラー
+            if not dfs:
                 st.error("No data available for analysis")
                 return
-            
-            # データの前処理：日付でソートして全データが見えるようにする
-            if '日付' in main_df.columns:
+
+            # 代表 DF を用いて必要な前処理（例: 日付ソート）
+            if main_df is not None and '日付' in main_df.columns:
                 main_df = main_df.sort_values('日付').reset_index(drop=True)
             
-            # 拡張されたプレフィックスを使用
+            # 拡張されたプレフィックスを作成
             prefix = self._create_enhanced_prefix(df_info)
             
-            # Pandasエージェントを作成
+            # Pandasエージェントを作成（複数 DataFrame をリストで渡す）
+            # df, df1, df2... のように自動で変数名が割り当てられる
             self.agent_executor = create_pandas_dataframe_agent(
                 self.llm,
-                df=main_df,
+                dfs,  # すべての DF をリストで渡す
                 verbose=True,
                 allow_dangerous_code=True,
                 agent_type=AgentType.OPENAI_FUNCTIONS,
@@ -211,12 +239,6 @@ class TreasuryAgent:
         利用可能なデータ:
         {chr(10).join(df_info)}
         
-        重要な注意事項:
-        - データには複数の国のデータが含まれています
-        - 「日本以外」や特定の国のデータを求められた場合は、必ず国名列でフィルタリングしてください
-        - データ分析前に必ずdf['国名'].unique()で利用可能な国を確認してください
-        - 国別の分析を行う際は、df[df['国名'] == '指定国名']でフィルタリングしてください
-        
         これらのデータを使って、ユーザーの質問に答えてください。
         
         グラフや可視化が必要な場合は、以下のガイドラインに従ってください：
@@ -230,6 +252,9 @@ class TreasuryAgent:
         ```python
         import matplotlib.pyplot as plt
         
+        # まず利用可能なデータの構造を確認
+        print("利用可能なデータの構造:", df.columns)
+
         # まず利用可能な国を確認
         print("利用可能な国:", df['国名'].unique())
         

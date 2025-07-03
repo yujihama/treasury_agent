@@ -284,6 +284,53 @@ def display_dashboard(dataframes):
                 if not daily_flow.empty:
                     cashflow_fig = Visualizer.create_cashflow_chart(daily_flow)
                     st.plotly_chart(cashflow_fig, use_container_width=True)
+
+            # ----------- 追加: 日本円換算サマリー -------------
+            if not dataframes['fx_rates'].empty:
+                jpy_balances = DataProcessor.convert_balances_to_jpy(latest_balances, dataframes['fx_rates'])
+            else:
+                jpy_balances = latest_balances.copy()
+                jpy_balances['残高JPY'] = jpy_balances['残高']
+
+            # 通貨別
+            currency_summary = (
+                jpy_balances.groupby('通貨')['残高JPY']
+                .sum()
+                .reset_index()
+                .sort_values('残高JPY', ascending=False)
+            )
+
+            # 銀行別
+            bank_summary = (
+                jpy_balances.groupby('銀行名')['残高JPY']
+                .sum()
+                .reset_index()
+                .sort_values('残高JPY', ascending=False)
+            )
+
+            # 地域別
+            jpy_balances = DataProcessor.add_region_column(jpy_balances)
+            region_summary = (
+                jpy_balances.groupby('地域')['残高JPY']
+                .sum()
+                .reset_index()
+                .sort_values('残高JPY', ascending=False)
+            )
+
+            # グラフ作成
+            currency_fig = Visualizer.create_bar_chart(currency_summary, '通貨', '残高JPY', '通貨別合計残高 (JPY換算)')
+            bank_fig = Visualizer.create_bar_chart(bank_summary, '銀行名', '残高JPY', '銀行別残高 (JPY換算)')
+            region_fig = Visualizer.create_bar_chart(region_summary, '地域', '残高JPY', '地域別残高 (JPY換算)')
+
+            st.markdown("### 日本円換算サマリー")
+            col_j1, col_j2, col_j3 = st.columns(3)
+            with col_j1:
+                st.plotly_chart(currency_fig, use_container_width=True)
+            with col_j2:
+                st.plotly_chart(bank_fig, use_container_width=True)
+            with col_j3:
+                st.plotly_chart(region_fig, use_container_width=True)
+            # ----------- 追加ここまで -------------
         else:
             st.warning("No data found for the selected filter conditions.")
     else:
