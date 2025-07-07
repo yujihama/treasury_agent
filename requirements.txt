@@ -8,3 +8,16 @@ langchain-experimental>=0.3.4
 numpy>=1.24.0
 matplotlib
 tabulate
+seaborn
+matplotlib
+altair
+vega_datasets
+bokeh
+holoviews
+hvplot
+pydeck
+pyecharts
+folium
+geopandas
+scikit-learn
+Pillow

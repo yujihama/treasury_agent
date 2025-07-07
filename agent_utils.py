@@ -45,239 +45,238 @@ def _set_default_japanese_font():
 _set_default_japanese_font()
 # ----------------------------------------------------------------------
 
-class TreasuryAgent:
-    """トレジャリーマネジメント用のLangChainエージェント"""
+# class TreasuryAgent:
+#     """トレジャリーマネジメント用のLangChainエージェント"""
     
-    def __init__(self, openai_api_key: Optional[str] = None):
-        self.openai_api_key = openai_api_key
-        self.llm = None
-        self.agent_executor = None
-        self.dataframes = {}
+#     def __init__(self, openai_api_key: Optional[str] = None):
+#         self.openai_api_key = openai_api_key
+#         self.llm = None
+#         self.agent_executor = None
+#         self.dataframes = {}
         
-        if openai_api_key:
-            self._initialize_llm()
+#         if openai_api_key:
+#             self._initialize_llm()
     
-    def _initialize_llm(self):
-        """LLMを初期化"""
-        try:
-            self.llm = ChatOpenAI(
-                model="gpt-4.1-mini",
-                temperature=0,
-                openai_api_key=self.openai_api_key
-            )
-        except Exception as e:
-            st.error(f"LLMの初期化に失敗しました: {e}")
-            self.llm = None
+#     def _initialize_llm(self):
+#         """LLMを初期化"""
+#         try:
+#             self.llm = ChatOpenAI(
+#                 model="gpt-4.1-mini",
+#                 temperature=0,
+#                 openai_api_key=self.openai_api_key
+#             )
+#         except Exception as e:
+#             st.error(f"LLMの初期化に失敗しました: {e}")
+#             self.llm = None
     
-    def set_dataframes(self, 
-                      df_balances: pd.DataFrame = None,
-                      df_transactions: pd.DataFrame = None,
-                      df_budgets: pd.DataFrame = None,
-                      df_fx_rates: pd.DataFrame = None):
-        """データフレームを設定"""
-        self.dataframes = {}
+#     def set_dataframes(self, 
+#                       df_balances: pd.DataFrame = None,
+#                       df_transactions: pd.DataFrame = None,
+#                       df_budgets: pd.DataFrame = None,
+#                       df_fx_rates: pd.DataFrame = None):
+#         """データフレームを設定"""
+#         self.dataframes = {}
         
-        if df_balances is not None and not df_balances.empty:
-            self.dataframes['balances'] = df_balances
-        if df_transactions is not None and not df_transactions.empty:
-            self.dataframes['transactions'] = df_transactions
-        if df_budgets is not None and not df_budgets.empty:
-            self.dataframes['budgets'] = df_budgets
-        if df_fx_rates is not None and not df_fx_rates.empty:
-            self.dataframes['fx_rates'] = df_fx_rates
+#         if df_balances is not None and not df_balances.empty:
+#             self.dataframes['balances'] = df_balances
+#         if df_transactions is not None and not df_transactions.empty:
+#             self.dataframes['transactions'] = df_transactions
+#         if df_budgets is not None and not df_budgets.empty:
+#             self.dataframes['budgets'] = df_budgets
+#         if df_fx_rates is not None and not df_fx_rates.empty:
+#             self.dataframes['fx_rates'] = df_fx_rates
         
-        # エージェントを再初期化
-        if self.llm:
-            self._initialize_agent()
+#         # エージェントを再初期化
+#         if self.llm:
+#             self._initialize_agent()
     
-    def _initialize_agent(self):
-        """エージェントを初期化"""
-        if not self.llm or not self.dataframes:
-            return
+#     def _initialize_agent(self):
+#         """エージェントを初期化"""
+#         if not self.llm or not self.dataframes:
+#             return
         
-        try:
-            # ------------------------------------------------------------
-            # すべての DataFrame をリストにまとめ、Pandas エージェントへ渡す
-            # ------------------------------------------------------------
-            dfs: list[pd.DataFrame] = []  # create_pandas_dataframe_agent へ渡す DF のリスト
+#         try:
+#             # ------------------------------------------------------------
+#             # すべての DataFrame をリストにまとめ、Pandas エージェントへ渡す
+#             # ------------------------------------------------------------
+#             dfs: list[pd.DataFrame] = []  # create_pandas_dataframe_agent へ渡す DF のリスト
 
-            main_df: Optional[pd.DataFrame] = None  # 日付ソートなどの代表 DF
-            df_info: list[str] = []  # プレフィックスに挿入するデータ概要
+#             main_df: Optional[pd.DataFrame] = None  # 日付ソートなどの代表 DF
+#             df_info: list[str] = []  # プレフィックスに挿入するデータ概要
 
-            # balances
-            if 'balances' in self.dataframes:
-                df_balances = self.dataframes['balances'].copy()
-                dfs.append(df_balances)
-                if main_df is None:
-                    main_df = df_balances
+#             # balances
+#             if 'balances' in self.dataframes:
+#                 df_balances = self.dataframes['balances'].copy()
+#                 dfs.append(df_balances)
+#                 if main_df is None:
+#                     main_df = df_balances
 
-                df_info.append("Balance Data(df): Date, Account ID, Bank Name, Currency, Balance, Country, Country Code")
+#                 df_info.append("Balance Data(df): Date, Account ID, Bank Name, Currency, Balance, Country, Country Code")
 
-                # データの詳細情報を追加
-                countries = df_balances['国名'].unique() if '国名' in df_balances.columns else []
-                df_info.append(f"Available Countries: {', '.join(countries)}")
-                df_info.append(f"Total Data Count: {len(df_balances)}")
+#                 # データの詳細情報を追加
+#                 countries = df_balances['国名'].unique() if '国名' in df_balances.columns else []
+#                 df_info.append(f"Available Countries: {', '.join(countries)}")
+#                 df_info.append(f"Total Data Count: {len(df_balances)}")
 
-                # 国別データ数を追加
-                if '国名' in df_balances.columns:
-                    country_counts = df_balances['国名'].value_counts()
-                    country_info = [f"{country}: {count}件" for country, count in country_counts.items()]
-                    df_info.append(f"Country-wise Data Count: {', '.join(country_info)}")
+#                 # 国別データ数を追加
+#                 if '国名' in df_balances.columns:
+#                     country_counts = df_balances['国名'].value_counts()
+#                     country_info = [f"{country}: {count}件" for country, count in country_counts.items()]
+#                     df_info.append(f"Country-wise Data Count: {', '.join(country_info)}")
 
-            # transactions
-            if 'transactions' in self.dataframes:
-                df_transactions = self.dataframes['transactions'].copy()
-                dfs.append(df_transactions)
-                if main_df is None:
-                    main_df = df_transactions
+#             # transactions
+#             if 'transactions' in self.dataframes:
+#                 df_transactions = self.dataframes['transactions'].copy()
+#                 dfs.append(df_transactions)
+#                 if main_df is None:
+#                     main_df = df_transactions
 
-                df_info.append("Transaction Data(df1): Date, Account ID, Transaction ID, Transaction Type, Amount, Summary, Counterpart Country, Counterpart Country Code")
+#                 df_info.append("Transaction Data(df1): Date, Account ID, Transaction ID, Transaction Type, Amount, Summary, Counterpart Country, Counterpart Country Code")
 
-            # budgets
-            if 'budgets' in self.dataframes:
-                df_budgets = self.dataframes['budgets'].copy()
-                dfs.append(df_budgets)
-                df_info.append("Budget Data(df2): Date, Account ID, Budget Amount, Currency, Country, Country Code")
+#             # budgets
+#             if 'budgets' in self.dataframes:
+#                 df_budgets = self.dataframes['budgets'].copy()
+#                 dfs.append(df_budgets)
+#                 df_info.append("Budget Data(df2): Date, Account ID, Budget Amount, Currency, Country, Country Code")
 
-            # fx_rates
-            if 'fx_rates' in self.dataframes:
-                df_fx = self.dataframes['fx_rates'].copy()
-                dfs.append(df_fx)
-                df_info.append("FX Rate Data(df3): Date, Base Currency, Quote Currency, Rate")
+#             # fx_rates
+#             if 'fx_rates' in self.dataframes:
+#                 df_fx = self.dataframes['fx_rates'].copy()
+#                 dfs.append(df_fx)
+#                 df_info.append("FX Rate Data(df3): Date, Base Currency, Quote Currency, Rate")
 
-            # データが 1 件も無い場合はエラー
-            if not dfs:
-                st.error("No data available for analysis")
-                return
+#             # データが 1 件も無い場合はエラー
+#             if not dfs:
+#                 st.error("No data available for analysis")
+#                 return
 
-            # 代表 DF を用いて必要な前処理（例: 日付ソート）
-            if main_df is not None and '日付' in main_df.columns:
-                main_df = main_df.sort_values('日付').reset_index(drop=True)
+#             # 代表 DF を用いて必要な前処理（例: 日付ソート）
+#             if main_df is not None and '日付' in main_df.columns:
+#                 main_df = main_df.sort_values('日付').reset_index(drop=True)
             
-            # 拡張されたプレフィックスを作成
-            prefix = self._create_enhanced_prefix(df_info)
+#             # 拡張されたプレフィックスを作成
+#             prefix = self._create_enhanced_prefix(df_info)
             
-            # Pandasエージェントを作成（複数 DataFrame をリストで渡す）
-            # df, df1, df2... のように自動で変数名が割り当てられる
-            self.agent_executor = create_pandas_dataframe_agent(
-                self.llm,
-                dfs,  # すべての DF をリストで渡す
-                verbose=True,
-                allow_dangerous_code=True,
-                agent_type=AgentType.OPENAI_FUNCTIONS,
-                prefix=prefix
-            )
+#             # Pandasエージェントを作成（複数 DataFrame をリストで渡す）
+#             # df, df1, df2... のように自動で変数名が割り当てられる
+#             self.agent_executor = create_pandas_dataframe_agent(
+#                 self.llm,
+#                 dfs,  # すべての DF をリストで渡す
+#                 verbose=True,
+#                 allow_dangerous_code=True,
+#                 agent_type=AgentType.OPENAI_FUNCTIONS,
+#                 prefix=prefix
+#             )
             
-        except Exception as e:
-            st.error(f"Failed to initialize the agent: {e}")
-            self.agent_executor = None
+#         except Exception as e:
+#             st.error(f"Failed to initialize the agent: {e}")
+#             self.agent_executor = None
     
-    def query(self, user_input: str) -> str:
-        """ユーザーの質問に回答"""
-        if not self.agent_executor:
-            return "The agent is not initialized. Please set the OpenAI API key and load the data."
+#     def query(self, user_input: str) -> str:
+#         """ユーザーの質問に回答"""
+#         if not self.agent_executor:
+#             return "The agent is not initialized. Please set the OpenAI API key and load the data."
         
-        try:
-            # セッション状態でグラフを管理
-            if 'generated_plots' not in st.session_state:
-                st.session_state.generated_plots = []
+#         try:
+#             # セッション状態でグラフを管理
+#             if 'generated_plots' not in st.session_state:
+#                 st.session_state.generated_plots = []
 
-            # --- 追加: コンソール出力をキャプチャ ---
-            stdout_buffer = io.StringIO()
-            with contextlib.redirect_stdout(stdout_buffer):
-                response = self.agent_executor.invoke({"input": user_input})
-            console_output = stdout_buffer.getvalue()
-            # ----------------------------------------
+#             # --- 追加: コンソール出力をキャプチャ ---
+#             stdout_buffer = io.StringIO()
+#             with contextlib.redirect_stdout(stdout_buffer):
+#                 response = self.agent_executor.invoke({"input": user_input})
+#             console_output = stdout_buffer.getvalue()
+#             # ----------------------------------------
 
-            # --- ANSIエスケープシーケンスを除去して見やすいログに変換 ---
-            def _strip_ansi_codes(text: str) -> str:
-                """ANSIカラーコードを除去したプレーンテキストを返す"""
-                ansi_escape = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")
-                return ansi_escape.sub("", text)
+#             # --- ANSIエスケープシーケンスを除去して見やすいログに変換 ---
+#             def _strip_ansi_codes(text: str) -> str:
+#                 """ANSIカラーコードを除去したプレーンテキストを返す"""
+#                 ansi_escape = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")
+#                 return ansi_escape.sub("", text)
 
-            cleaned_output = _strip_ansi_codes(console_output)
-            # -------------------------------------------------------------
+#             cleaned_output = _strip_ansi_codes(console_output)
+#             # -------------------------------------------------------------
 
-            output = response.get("output", "Failed to generate a response.")
+#             output = response.get("output", "Failed to generate a response.")
 
-            # matplotlibのグラフをキャプチャして表示
-            self._capture_and_display_plots()
+#             # matplotlibのグラフをキャプチャして表示
+#             self._capture_and_display_plots()
 
-            # キャプチャしたログをStreamlitで表示
-            if cleaned_output:
-                with st.expander("詳細ログ", expanded=False):
-                    st.code(cleaned_output, language="bash")
+#             # キャプチャしたログをStreamlitで表示
+#             if cleaned_output:
+#                 with st.expander("詳細ログ", expanded=False):
+#                     st.code(cleaned_output, language="bash")
 
-            return output
-        except Exception as e:
-            error_msg = f"Agent execution error: {str(e)}"
-            st.error(error_msg)
-            return error_msg
+#             return output
+#         except Exception as e:
+#             error_msg = f"Agent execution error: {str(e)}"
+#             st.error(error_msg)
+#             return error_msg
     
-    def _capture_and_display_plots(self):
-        """生成されたmatplotlibプロットをキャプチャしてStreamlitで表示"""
-        try:
-            # 現在のすべてのfigureを取得
-            figures = plt.get_fignums()
+#     def _capture_and_display_plots(self):
+#         """生成されたmatplotlibプロットをキャプチャしてStreamlitで表示"""
+#         try:
+#             # 現在のすべてのfigureを取得
+#             figures = plt.get_fignums()
             
-            for fig_num in figures:
-                fig = plt.figure(fig_num)
+#             for fig_num in figures:
+#                 fig = plt.figure(fig_num)
                 
-                # figureが空でないかチェック
-                if fig.axes:
-                    # StreamlitでMatplotlibグラフを表示
-                    st.pyplot(fig, clear_figure=True)
+#                 # figureが空でないかチェック
+#                 if fig.axes:
+#                     # StreamlitでMatplotlibグラフを表示
+#                     st.pyplot(fig, clear_figure=True)
                     
-        except Exception as e:
-            st.error(f"Graph display error: {str(e)}")
+#         except Exception as e:
+#             st.error(f"Graph display error: {str(e)}")
     
-    def _create_enhanced_prefix(self, df_info: list) -> str:
-        """拡張されたプレフィックスを作成（グラフ生成指示を含む）"""
-        return f"""
-        あなたは企業のトレジャリーマネジメントを支援するAIアシスタントです。
+#     def _create_enhanced_prefix(self, df_info: list) -> str:
+#         """拡張されたプレフィックスを作成（グラフ生成指示を含む）"""
+#         return f"""
+#         あなたは企業のトレジャリーマネジメントを支援するAIアシスタントです。
         
-        利用可能なデータ:
-        {chr(10).join(df_info)}
+#         利用可能なデータ:
+#         {chr(10).join(df_info)}
         
-        これらのデータを使って、ユーザーの質問に答えてください。
+#         これらのデータを使って、ユーザーの質問に答えてください。
         
-        グラフや可視化が必要な場合は、以下のガイドラインに従ってください：
-        1. matplotlib.pyplotを使用してグラフを作成してください
-        2. plt.figure(figsize=(10, 6))でサイズを指定してください
-        3. 日本語のタイトルと軸ラベルを設定してください
-        4. plt.show()を呼び出してグラフを表示してください
-        5. グラフの説明も含めて回答してください
+#         グラフや可視化が必要な場合は、以下のガイドラインに従ってください：
+#         1. matplotlib.pyplotを使用してグラフを作成してください
+#         2. plt.figure(figsize=(10, 6))でサイズを指定してください
+#         3. 日本語のタイトルと軸ラベルを設定してください
+#         4. plt.show()を呼び出してグラフを表示してください
+#         5. グラフの説明も含めて回答してください
         
-        例：
-        ```python
-        import matplotlib.pyplot as plt
+#         例：
+#         ```python
+#         import matplotlib.pyplot as plt
         
-        # まず利用可能なデータの構造を確認
-        print("利用可能なデータの構造:", df.columns)
+#         # まず利用可能なデータの構造を確認
+#         print("利用可能なデータの構造:", df.columns)
 
-        # まず利用可能な国を確認
-        print("利用可能な国:", df['国名'].unique())
+#         # まず利用可能な国を確認
+#         print("利用可能な国:", df['国名'].unique())
         
-        # 日本以外のデータをフィルタリング
-        non_japan_data = df[df['国名'] != '日本']
+#         # 日本以外のデータをフィルタリング
+#         non_japan_data = df[df['国名'] != '日本']
         
-        # グラフ作成
-        plt.figure(figsize=(10, 6))
-        plt.bar(data.index, data.values)
-        plt.title('データの可視化')
-        plt.xlabel('項目')
-        plt.ylabel('値')
-        plt.show()
-        ```
+#         # グラフ作成
+#         plt.figure(figsize=(10, 6))
+#         plt.bar(data.index, data.values)
+#         plt.title('データの可視化')
+#         plt.xlabel('項目')
+#         plt.ylabel('値')
+#         plt.show()
+#         ```
         
-        最終的な回答は日本語で分かりやすく説明してください。
-        """
+#         最終的な回答は日本語で分かりやすく説明してください。
+#         """
     
-    def is_ready(self) -> bool:
-        """エージェントが使用可能かチェック"""
-        return self.agent_executor is not None and bool(self.dataframes)
+#     def is_ready(self) -> bool:
+#         """エージェントが使用可能かチェック"""
+#         return self.agent_executor is not None and bool(self.dataframes)
 
-# 非LLM版の分析機能（APIキーが無い場合のフォールバック）
 class BasicAnalyzer:
     """基本的な分析機能（LLMを使わない）"""
     

@@ -418,48 +418,53 @@ def display_chat_interface(dataframes, api_key):
         st.warning("To use the chat feature, please enter the OpenAI API key in the sidebar.")
         st.info("Basic analysis features are available without an API key.")
         return
-    
-    # エージェント初期化
-    if 'treasury_agent' not in st.session_state:
-        st.session_state.treasury_agent = TreasuryAgent(api_key)
-    
-    agent = st.session_state.treasury_agent
-    agent.set_dataframes(
-        df_balances=dataframes['balances'],
-        df_transactions=dataframes['transactions'],
-        df_budgets=dataframes['budgets'],
-        df_fx_rates=dataframes['fx_rates']
-    )
-    
-    if not agent.is_ready():
-        st.error("Failed to initialize the agent. Please check the API key and data.")
-        return
-    
-    # チャット履歴の初期化
-    if "chat_messages" not in st.session_state:
-        st.session_state.chat_messages = []
-    
-    # ------------------------ 1) 既存メッセージの表示 ------------------------
-    for message in st.session_state.chat_messages:
-        with st.chat_message(message["role"]):
-            st.markdown(message["content"])
-    
-    # ------------------------ 2) チャット入力 ------------------------
-    prompt = st.chat_input("Please ask about the Treasury data...")
-    if prompt:
-        # --- ユーザーメッセージの表示と履歴保存 ---
-        with st.chat_message("user"):
-            st.markdown(prompt)
-        st.session_state.chat_messages.append({"role": "user", "content": prompt})
 
-        # --- レスポンス生成 ---
-        with st.spinner("Generating a response..."):
-            response_text = agent.query(prompt)
+    # chat_interface.pyのmain を呼び出す
+    st.session_state.api_key = api_key
+    from chat_interface import main as chat_main
+    chat_main(dataframes)
 
-        # --- アシスタントメッセージの表示と履歴保存 ---
-        with st.chat_message("assistant"):
-            st.markdown(response_text)
-        st.session_state.chat_messages.append({"role": "assistant", "content": response_text})
+    # # エージェント初期化
+    # if 'treasury_agent' not in st.session_state:
+    #     st.session_state.treasury_agent = TreasuryAgent(api_key)
+    
+    # agent = st.session_state.treasury_agent
+    # agent.set_dataframes(
+    #     df_balances=dataframes['balances'],
+    #     df_transactions=dataframes['transactions'],
+    #     df_budgets=dataframes['budgets'],
+    #     df_fx_rates=dataframes['fx_rates']
+    # )
+    
+    # if not agent.is_ready():
+    #     st.error("Failed to initialize the agent. Please check the API key and data.")
+    #     return
+    
+    # # チャット履歴の初期化
+    # if "chat_messages" not in st.session_state:
+    #     st.session_state.chat_messages = []
+    
+    # # ------------------------ 1) 既存メッセージの表示 ------------------------
+    # for message in st.session_state.chat_messages:
+    #     with st.chat_message(message["role"]):
+    #         st.markdown(message["content"])
+    
+    # # ------------------------ 2) チャット入力 ------------------------
+    # prompt = st.chat_input("Please ask about the Treasury data...")
+    # if prompt:
+    #     # --- ユーザーメッセージの表示と履歴保存 ---
+    #     with st.chat_message("user"):
+    #         st.markdown(prompt)
+    #     st.session_state.chat_messages.append({"role": "user", "content": prompt})
+
+    #     # --- レスポンス生成 ---
+    #     with st.spinner("Generating a response..."):
+    #         response_text = agent.query(prompt)
+
+    #     # --- アシスタントメッセージの表示と履歴保存 ---
+    #     with st.chat_message("assistant"):
+    #         st.markdown(response_text)
+    #     st.session_state.chat_messages.append({"role": "assistant", "content": response_text})
 
 if __name__ == "__main__":
     main()
