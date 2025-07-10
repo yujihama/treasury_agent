@@ -36,6 +36,7 @@ class LLMClient:
                 model_name=model,
                 temperature=0,
             )
+
         except ImportError as e:
             st.error("LangChain (langchain_openai) がインストールされていません。")
             raise e
@@ -276,4 +277,4 @@ class LLMClient:
         logging.info(f"LLM fix_code call completed in {end_time - start_time:.2f}s")
 
         return response.content.strip()
-
+    

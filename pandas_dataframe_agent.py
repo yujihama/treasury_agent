@@ -163,7 +163,8 @@ def _get_functions_prompt(df: Any, **kwargs: Any) -> ChatPromptTemplate:
         if "prefix" not in kwargs or kwargs.get("prefix") is None:
             kwargs = dict(kwargs)
             kwargs["prefix"] = (
-                f"You are working with {len(df)} pandas dataframes in Python named {df_names}."
+                f"あなたは{len(df)}個のpandasデータフレーム（{df_names}）をPythonで操作しています。 "
+                "以下のツールを使用して、あなたに投げかけられた質問に答えてください："
             )
         return _get_functions_multi_prompt(list(df.values()), **kwargs)
     else:
@@ -194,6 +195,7 @@ def create_pandas_dataframe_agent(
     extra_tools: Sequence[BaseTool] = (),
     engine: Literal["pandas", "modin"] = "pandas",
     allow_dangerous_code: bool = False,
+    df_exec_instruction: bool = False,
     **kwargs: Any,
 ) -> AgentExecutor:
     """Construct a Pandas agent from an LLM and dataframe(s).
@@ -323,11 +325,14 @@ def create_pandas_dataframe_agent(
     # -----------------------------
     # Ensure the agent always executes the DataFrame via PythonAstREPLTool at the end
     # -----------------------------
-    _force_df_exec_instruction = ""
     
-    # _force_df_exec_instruction = (
-    #     "最後に必ず PythonAstREPLTool を使用して 最終成果物のDataFrame (例: `df`や`df_filtered`など …) を実行し、dataframeが正常に生成されている旨回答してください。その際print文やhead()は使用しないでください。"
-    # )
+    if df_exec_instruction:
+        _force_df_exec_instruction = (
+            "各ステップ最後に必ず PythonAstREPLTool を使用して 中間成果物のDataFrameに対してhead()を実行し、DataFrameが正常に生成されている旨回答してください。"
+        )
+    else:
+        _force_df_exec_instruction = ""
+
     if suffix is not None:
         suffix = f"{suffix}\n\n{_force_df_exec_instruction}"
         # suffix が指定された場合、include_df_in_prompt を None にしてエラーを回避

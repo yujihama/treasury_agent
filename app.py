@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import os
 from data_utils import DataProcessor, Visualizer
-from agent_utils import TreasuryAgent, BasicAnalyzer
+from agent_utils import BasicAnalyzer
 
 # ページ設定
 st.set_page_config(
