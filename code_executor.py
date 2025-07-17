@@ -115,13 +115,13 @@ class CodeExecutor:
         Returns:
             (success, stdout_output, error_message): 実行結果
         """
-        # まず構文チェックを実施
-        syntax_ok, syntax_error = self._check_syntax(code)
-        if not syntax_ok:
-            # 構文エラーの場合は実行せずにエラーを返す
-            return False, None, syntax_error
-
         try:
+            # まず構文チェックを実施
+            syntax_ok, syntax_error = self._check_syntax(code)
+            if not syntax_ok:
+                # 構文エラーの場合は実行せずにエラーを返す
+                return False, None, syntax_error
+        
             with self.capture_stdout() as stdout_capture:
                 # コードを実行
                 exec(code, self.safe_globals)
@@ -132,7 +132,7 @@ class CodeExecutor:
             return True, stdout_output if stdout_output else None, None
             
         except Exception as e:
-            error_message = f"{type(e).__name__}: {str(e)}\n\n{traceback.format_exc()}"
+            error_message = f"[debug]{type(e).__name__}: {str(e)}\n\n{traceback.format_exc()}"
             return False, None, error_message
     
     def _check_syntax(self, code: str) -> Tuple[bool, Optional[str]]:

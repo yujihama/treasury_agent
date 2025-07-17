@@ -14,30 +14,103 @@ class DataProcessor:
     
     @staticmethod
     def load_csv_data(uploaded_file, data_type: str) -> pd.DataFrame:
-        """CSVファイルを読み込み、基本的な前処理を行う"""
+        """CSVファイルを読み込み、基本的な前処理を行う。
+        uploaded_file は Streamlit の UploadedFile だけでなく、str パスも許容する。
+        """
         if uploaded_file is None:
             return pd.DataFrame()
-        
         try:
-            df = pd.read_csv(uploaded_file)
-            
+            # パス文字列か UploadedFile かを判定
+            if isinstance(uploaded_file, str):
+                df = pd.read_csv(uploaded_file)
+            else:
+                df = pd.read_csv(uploaded_file)
+
+            # 英語→日本語列名変換
+            df = DataProcessor._rename_columns_to_japanese(df, data_type)
+
             # 日付カラムの処理
             if '日付' in df.columns:
                 try:
                     df['日付'] = pd.to_datetime(df['日付'])
                 except Exception as e:
-                    st.warning(f"{data_type}の日付列の変換に失敗しました: {e}")
-            
-            # 国コードの標準化
+                    st.warning(f"{data_type} の日付列の変換に失敗しました: {e}")
+
+            # 国コード alpha2→alpha3 変換
+            df = DataProcessor._convert_country_code_alpha2_to_alpha3(df)
+
+            # 国コードの標準化（不足時のみ）
             df = DataProcessor._standardize_country_codes(df)
-            
-            st.success(f"{data_type}データが正常に読み込まれました。({len(df)}件)")
+
+            st.success(f"{data_type} データが正常に読み込まれました。({len(df)} 件)")
             return df
-            
         except Exception as e:
-            st.error(f"{data_type}データの読み込みに失敗しました: {e}")
+            st.error(f"{data_type} データの読み込みに失敗しました: {e}")
             return pd.DataFrame()
     
+    @staticmethod
+    def _rename_columns_to_japanese(df: pd.DataFrame, data_type: str) -> pd.DataFrame:
+        """英語列名を既存スキーマの日本語列名に変換する。既に日本語列名の場合は変更しない。"""
+        # データ種別ごとにマッピングを定義
+        column_maps: dict[str, dict[str, str]] = {
+            'balances': {
+                'date': '日付',
+                'account_id': '口座ID',
+                'bank_name': '銀行名',
+                'currency': '通貨',
+                'balance': '残高',
+                'country_name': '国名',
+                'country_code': '国コード',
+            },
+            'transactions': {
+                'transaction_date': '日付',
+                'account_id': '口座ID',
+                'transaction_id': '取引ID',
+                'transaction_type': '取引タイプ',
+                'amount': '金額',
+                'currency': '通貨',
+                'description': '概要',
+                'counterparty_country_name': '相手国名',
+                'counterparty_country_code': '相手国コード',
+            },
+            'fx_rates': {
+                'date': '日付',
+                'currency_pair': '通貨ペア',
+                'rate': 'レート',
+            },
+            # 他のデータ種別は必要に応じて追加
+        }
+
+        # 小文字化した列名で一致を判定
+        rename_map: dict[str, str] = {}
+        if data_type in column_maps:
+            lower_map = {k.lower(): v for k, v in column_maps[data_type].items()}
+            for col in df.columns:
+                if col.lower() in lower_map:
+                    rename_map[col] = lower_map[col.lower()]
+
+        if rename_map:
+            df = df.rename(columns=rename_map)
+        return df
+
+    @staticmethod
+    def _convert_country_code_alpha2_to_alpha3(df: pd.DataFrame) -> pd.DataFrame:
+        """国コードが2文字(alpha-2)の場合に3文字(alpha-3)へ変換する"""
+        if '国コード' not in df.columns:
+            return df
+        def _alpha2_to_alpha3(code: str | float | None):
+            if not isinstance(code, str):
+                return code
+            code = code.strip()
+            if len(code) == 2:
+                try:
+                    return pycountry.countries.get(alpha_2=code).alpha_3
+                except Exception:
+                    return code  # 変換失敗はそのまま
+            return code
+        df['国コード'] = df['国コード'].apply(_alpha2_to_alpha3)
+        return df
+
     @staticmethod
     def _standardize_country_codes(df: pd.DataFrame) -> pd.DataFrame:
         """国名と国コードの標準化"""

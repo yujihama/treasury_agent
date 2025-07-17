@@ -21,3 +21,4 @@ folium
 geopandas
 scikit-learn
 Pillow
+langgraph

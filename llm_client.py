@@ -140,7 +140,8 @@ class LLMClient:
    - 適切なタイトルを設定
    - 表示のタイトル等はmarkdownで表示する。トップレベルはst.markdown("##")、サブレベルはst.markdown("###")
    - st.sidebarは禁止
-   
+   - st.sliderを使う場合は、Python 標準の型(int, float, datetime.date, datetime.time, datetime.datetime)である必要があります。
+
 4. 禁止事項：
    - ファイル操作
    - ネットワーク通信

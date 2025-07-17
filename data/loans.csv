@@ -1,0 +1,5 @@
+loan_id,lender_name,loan_date,maturity_date,principal_amount,outstanding_balance,currency,interest_rate,interest_type
+LN-US-01,Mega_Bank_USA,2023-10-01,2030-12-31,10000000,8500000,USD,4.5,fixed
+LN-EU-01,European_Central_Bank,2024-02-01,2028-06-30,5000000,4200000,EUR,3.8,variable
+LN-GB-01,London_Finance_Corp,2023-12-15,2026-12-15,2000000,1600000,GBP,5.2,fixed
+LN-AU-01,Australia_National_Bank,2024-04-01,2027-04-01,3000000,2800000,AUD,4.8,variable

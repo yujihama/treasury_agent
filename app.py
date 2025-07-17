@@ -3,6 +3,7 @@ import pandas as pd
 import os
 from data_utils import DataProcessor, Visualizer
 from agent_utils import BasicAnalyzer
+from dotenv import load_dotenv
 
 # ページ設定
 st.set_page_config(
@@ -66,10 +67,8 @@ def main():
         st.markdown('<h2 class="section-header">設定</h2>', unsafe_allow_html=True)
         
         # OpenAI APIキー設定
-        api_key = st.text_input(
-            "APIキー",
-            type="password"
-        )
+        api_key = st.text_input("OpenAI API Key", type="password", key="openai_api_key")
+        st.session_state.api_key = api_key.strip()
         
         st.markdown('<h2 class="section-header">データアップロード</h2>', unsafe_allow_html=True)
         
@@ -102,28 +101,34 @@ def main():
     
     # メインコンテンツ
     if any(not df.empty for df in dataframes.values()):
-        display_main_content(dataframes, api_key)
+        display_main_content(dataframes, st.session_state.api_key)
     else:
         st.info("データをアップロードするか、サンプルデータを使用してください。")
 
 def load_data(uploaded_files, use_sample_data):
-    """データを読み込む"""
+    """データを読み込む。アップロード > サンプルデータ > data フォルダの優先順で読み込む"""
+    # 初期化
     dataframes = {
         'balances': pd.DataFrame(),
         'transactions': pd.DataFrame(),
         'budgets': pd.DataFrame(),
-        'fx_rates': pd.DataFrame()
+        'fx_rates': pd.DataFrame(),
+        # 追加データセット
+        'payables': pd.DataFrame(),  # accounts payable
+        'receivables': pd.DataFrame(),  # accounts receivable
+        'loans': pd.DataFrame(),
+        'investments': pd.DataFrame(),
+        'derivatives': pd.DataFrame(),
     }
-    
+
+    # ------------------------ 1) サンプルデータ -------------------------
     if use_sample_data:
-        # サンプルデータを読み込み
         sample_files = {
             'balances': 'sample_balances.csv',
             'transactions': 'sample_transactions.csv',
             'budgets': 'sample_budgets.csv',
             'fx_rates': 'sample_fx_rates.csv'
         }
-        
         for key, filename in sample_files.items():
             if os.path.exists(filename):
                 try:
@@ -132,19 +137,36 @@ def load_data(uploaded_files, use_sample_data):
                         dataframes[key]['日付'] = pd.to_datetime(dataframes[key]['日付'])
                 except Exception as e:
                     st.error(f"サンプルデータ {filename} の読み込みに失敗: {e}")
-    else:
-        # アップロードされたファイルを読み込み
-        file_labels = {
-            'balances': '口座残高',
-            'transactions': '取引履歴',
-            'budgets': '予算',
-            'fx_rates': '為替レート'
-        }
-        
-        for key, uploaded_file in uploaded_files.items():
-            if uploaded_file:
-                dataframes[key] = DataProcessor.load_csv_data(uploaded_file, file_labels[key])
-    
+        return dataframes  # サンプル使用時はここで終了
+
+    # ------------------------ 2) アップロードファイル -------------------
+    file_labels = {
+        'balances': '口座残高',
+        'transactions': '取引履歴',
+        'budgets': '予算',
+        'fx_rates': '為替レート',
+    }
+    for key, uploaded_file in uploaded_files.items():
+        if uploaded_file:
+            dataframes[key] = DataProcessor.load_csv_data(uploaded_file, file_labels.get(key, key))
+
+    # ------------------------ 3) data フォルダ --------------------------
+    DATA_DIR = 'data'
+    local_files = {
+        'balances': os.path.join(DATA_DIR, 'account_balance.csv'),
+        'transactions': os.path.join(DATA_DIR, 'transactions.csv'),
+        'fx_rates': os.path.join(DATA_DIR, 'exchange_rates.csv'),
+        'payables': os.path.join(DATA_DIR, 'accounts_payable.csv'),
+        'receivables': os.path.join(DATA_DIR, 'accounts_receivable.csv'),
+        'loans': os.path.join(DATA_DIR, 'loans.csv'),
+        'investments': os.path.join(DATA_DIR, 'investments.csv'),
+        'derivatives': os.path.join(DATA_DIR, 'derivatives.csv'),
+    }
+    for key, path in local_files.items():
+        # 既に読み込まれていなければローカルファイルを読む
+        if dataframes[key].empty and os.path.exists(path):
+            dataframes[key] = DataProcessor.load_csv_data(path, key)
+
     return dataframes
 
 def display_main_content(dataframes, api_key):
@@ -339,19 +361,25 @@ def display_dashboard(dataframes):
 def display_data_viewer(dataframes):
     """データビューアを表示"""
     st.markdown('<h2 class="section-header">Data Viewer</h2>', unsafe_allow_html=True)
-    
+
     data_labels = {
         'balances': 'Balance Data',
         'transactions': 'Transaction Data',
         'budgets': 'Budget Data',
-        'fx_rates': 'FX Rate Data'
+        'fx_rates': 'FX Rate Data',
+        # 追加データ
+        'payables': 'Accounts Payable Data',
+        'receivables': 'Accounts Receivable Data',
+        'loans': 'Loans Data',
+        'investments': 'Investments Data',
+        'derivatives': 'Derivatives Data',
     }
-    
+
     for key, label in data_labels.items():
-        df = dataframes[key]
-        if not df.empty:
+        df = dataframes.get(key, pd.DataFrame())
+        if df is not None and not df.empty:
             st.subheader(label)
-            
+
             # データフレーム情報
             col1, col2, col3 = st.columns(3)
             with col1:
@@ -362,7 +390,7 @@ def display_data_viewer(dataframes):
                 if '日付' in df.columns:
                     date_range = f"{df['日付'].min().strftime('%Y-%m-%d')} ～ {df['日付'].max().strftime('%Y-%m-%d')}"
                     st.metric("Date Range", date_range)
-            
+
             # データ表示
             st.dataframe(df, use_container_width=True)
             st.markdown("---")
@@ -419,52 +447,17 @@ def display_chat_interface(dataframes, api_key):
         st.info("Basic analysis features are available without an API key.")
         return
 
-    # chat_interface.pyのmain を呼び出す
+    # LangGraph 版チャットインターフェースを呼び出す
     st.session_state.api_key = api_key
-    from chat_interface import main as chat_main
-    chat_main(dataframes)
 
-    # # エージェント初期化
-    # if 'treasury_agent' not in st.session_state:
-    #     st.session_state.treasury_agent = TreasuryAgent(api_key)
-    
-    # agent = st.session_state.treasury_agent
-    # agent.set_dataframes(
-    #     df_balances=dataframes['balances'],
-    #     df_transactions=dataframes['transactions'],
-    #     df_budgets=dataframes['budgets'],
-    #     df_fx_rates=dataframes['fx_rates']
-    # )
-    
-    # if not agent.is_ready():
-    #     st.error("Failed to initialize the agent. Please check the API key and data.")
-    #     return
-    
-    # # チャット履歴の初期化
-    # if "chat_messages" not in st.session_state:
-    #     st.session_state.chat_messages = []
-    
-    # # ------------------------ 1) 既存メッセージの表示 ------------------------
-    # for message in st.session_state.chat_messages:
-    #     with st.chat_message(message["role"]):
-    #         st.markdown(message["content"])
-    
-    # # ------------------------ 2) チャット入力 ------------------------
-    # prompt = st.chat_input("Please ask about the Treasury data...")
-    # if prompt:
-    #     # --- ユーザーメッセージの表示と履歴保存 ---
-    #     with st.chat_message("user"):
-    #         st.markdown(prompt)
-    #     st.session_state.chat_messages.append({"role": "user", "content": prompt})
+    # .env ファイルを読み込む
+    load_dotenv()
 
-    #     # --- レスポンス生成 ---
-    #     with st.spinner("Generating a response..."):
-    #         response_text = agent.query(prompt)
-
-    #     # --- アシスタントメッセージの表示と履歴保存 ---
-    #     with st.chat_message("assistant"):
-    #         st.markdown(response_text)
-    #     st.session_state.chat_messages.append({"role": "assistant", "content": response_text})
+    from chat_langgraph import main as chat_main
+    try:
+        chat_main(dataframes)
+    except Exception as e:
+        st.error(f"エラーが発生しました: {e}")
 
 if __name__ == "__main__":
     main()
