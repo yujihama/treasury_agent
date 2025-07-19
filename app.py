@@ -123,18 +123,22 @@ def load_data(uploaded_files, use_sample_data):
 
     # ------------------------ 1) サンプルデータ -------------------------
     if use_sample_data:
+        DATA_DIR = 'data'
         sample_files = {
-            'balances': 'sample_balances.csv',
-            'transactions': 'sample_transactions.csv',
-            'budgets': 'sample_budgets.csv',
-            'fx_rates': 'sample_fx_rates.csv'
+            'balances': os.path.join(DATA_DIR, 'account_balance.csv'),
+            'transactions': os.path.join(DATA_DIR, 'transactions.csv'),
+            'fx_rates': os.path.join(DATA_DIR, 'exchange_rates.csv'),
+            'payables': os.path.join(DATA_DIR, 'accounts_payable.csv'),
+            'receivables': os.path.join(DATA_DIR, 'accounts_receivable.csv'),
+            'loans': os.path.join(DATA_DIR, 'loans.csv'),
+            'investments': os.path.join(DATA_DIR, 'investments.csv'),
+            'derivatives': os.path.join(DATA_DIR, 'derivatives.csv'),
         }
         for key, filename in sample_files.items():
             if os.path.exists(filename):
                 try:
-                    dataframes[key] = pd.read_csv(filename)
-                    if '日付' in dataframes[key].columns:
-                        dataframes[key]['日付'] = pd.to_datetime(dataframes[key]['日付'])
+                    # data_utils の load_csv_data を使って読み込み、列名を変換
+                    dataframes[key] = DataProcessor.load_csv_data(filename, key)
                 except Exception as e:
                     st.error(f"サンプルデータ {filename} の読み込みに失敗: {e}")
         return dataframes  # サンプル使用時はここで終了
@@ -218,6 +222,7 @@ def display_dashboard(dataframes):
         
         with filter_col4:
             # 期間フィルタ
+            date_range = None # 初期化
             if '日付' in df_balances.columns:
                 df_balances['日付'] = pd.to_datetime(df_balances['日付'])
                 min_date = df_balances['日付'].min().date()
@@ -249,7 +254,7 @@ def display_dashboard(dataframes):
             filtered_balances = filtered_balances[filtered_balances['通貨'].isin(selected_currencies)]
         
         # 期間フィルタ適用
-        if isinstance(date_range, tuple) and len(date_range) == 2:
+        if date_range and isinstance(date_range, tuple) and len(date_range) == 2:
             start_date, end_date = date_range
             filtered_balances = filtered_balances[
                 (filtered_balances['日付'].dt.date >= start_date) & 
@@ -284,18 +289,22 @@ def display_dashboard(dataframes):
                 data_count = len(filtered_balances)
                 st.metric("Data Count", f"{data_count}")
             
+            # ----------- JPY換算処理を先に実行 -------------
+            if not dataframes['fx_rates'].empty:
+                latest_balances = DataProcessor.convert_balances_to_jpy(latest_balances, dataframes['fx_rates'])
+            
             # グラフ表示
             col1, col2 = st.columns(2)
             
             with col1:
-                # 口座別残高円グラフ
+                # 口座別残高円グラフ (JPY換算後)
                 pie_fig = Visualizer.create_balance_pie_chart(latest_balances)
                 st.plotly_chart(pie_fig, use_container_width=True)
             
             with col2:
-                # 世界地図
+                # 世界地図 (JPY換算後)
                 if '国コード' in latest_balances.columns:
-                    country_summary = DataProcessor.get_country_summary(filtered_balances)
+                    country_summary = DataProcessor.get_country_summary(latest_balances)
                     if not country_summary.empty:
                         map_fig = Visualizer.create_world_map(country_summary)
                         st.plotly_chart(map_fig, use_container_width=True)
@@ -307,12 +316,12 @@ def display_dashboard(dataframes):
                     cashflow_fig = Visualizer.create_cashflow_chart(daily_flow)
                     st.plotly_chart(cashflow_fig, use_container_width=True)
 
-            # ----------- 追加: 日本円換算サマリー -------------
-            if not dataframes['fx_rates'].empty:
-                jpy_balances = DataProcessor.convert_balances_to_jpy(latest_balances, dataframes['fx_rates'])
-            else:
+            # ----------- 日本円換算サマリー -------------
+            if '残高JPY' not in latest_balances.columns:
                 jpy_balances = latest_balances.copy()
                 jpy_balances['残高JPY'] = jpy_balances['残高']
+            else:
+                jpy_balances = latest_balances
 
             # 通貨別
             currency_summary = (

@@ -176,20 +176,24 @@ class DataProcessor:
     
     @staticmethod
     def get_country_summary(df_balances: pd.DataFrame) -> pd.DataFrame:
-        """国別の残高サマリーを取得"""
+        """国別の残高サマリーを取得。'残高JPY'があればそれを優先して集計する。"""
         if df_balances.empty or '国コード' not in df_balances.columns:
             return pd.DataFrame()
         
         # 最新残高を取得
         latest_balances = DataProcessor.get_latest_balances(df_balances)
         
+        # 使用する列を決定
+        value_col = '残高JPY' if '残高JPY' in latest_balances.columns else '残高'
+        
         # 国別に集計
         country_summary = latest_balances.groupby(['国コード', '国名']).agg({
-            '残高': 'sum',
+            value_col: 'sum',
             '口座ID': 'count'
         }).reset_index()
         
-        country_summary.rename(columns={'口座ID': '口座数'}, inplace=True)
+        # マップ描画のため、集計後の列名を'残高'に戻す
+        country_summary.rename(columns={'口座ID': '口座数', value_col: '残高'}, inplace=True)
         country_summary = country_summary.sort_values('残高', ascending=False)
         
         return country_summary
@@ -319,22 +323,26 @@ class Visualizer:
         return fig
     
     @staticmethod
-    def create_balance_pie_chart(latest_balances: pd.DataFrame) -> go.Figure:
-        """口座別残高の円グラフを作成"""
-        if latest_balances.empty:
+    def create_balance_pie_chart(balances_df: pd.DataFrame) -> go.Figure:
+        """口座別残高の円グラフを作成。'残高JPY' 列があればそれを使い、なければ '残高' を使う。"""
+        if balances_df.empty:
             return go.Figure()
         
+        # 使用する列を決定
+        value_col = '残高JPY' if '残高JPY' in balances_df.columns else '残高'
+        title_suffix = "(JPY換算)" if value_col == '残高JPY' else "(現地通貨)"
+        
         # 正の残高のみを表示
-        positive_balances = latest_balances[latest_balances['残高'] > 0]
+        positive_balances = balances_df[balances_df[value_col] > 0]
         
         fig = go.Figure(data=[go.Pie(
             labels=positive_balances['口座ID'],
-            values=positive_balances['残高'],
+            values=positive_balances[value_col],
             hovertemplate='<b>%{label}</b><br>残高: %{value:,.0f}<br>割合: %{percent}<extra></extra>'
         )])
         
         fig.update_layout(
-            title="口座別残高分布",
+            title=f"口座別残高分布 {title_suffix}",
             showlegend=True
         )
         
