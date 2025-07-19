@@ -42,7 +42,7 @@ class DataProcessor:
             # 国コードの標準化（不足時のみ）
             df = DataProcessor._standardize_country_codes(df)
 
-            st.success(f"{data_type} データが正常に読み込まれました。({len(df)} 件)")
+            # st.success(f"{data_type} データが正常に読み込まれました。({len(df)} 件)")
             return df
         except Exception as e:
             st.error(f"{data_type} データの読み込みに失敗しました: {e}")

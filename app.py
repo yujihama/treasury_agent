@@ -149,6 +149,11 @@ def load_data(uploaded_files, use_sample_data):
         'transactions': '取引履歴',
         'budgets': '予算',
         'fx_rates': '為替レート',
+        'payables': '買掛金',
+        'receivables': '売掛金',
+        'loans': '借入金',
+        'investments': '投資',
+        'derivatives': 'デリバティブ',
     }
     for key, uploaded_file in uploaded_files.items():
         if uploaded_file:

@@ -150,7 +150,7 @@ def refine_prompt_node(state: Dict[str, Any]):
 {user_prompt}
 
 # 前提
-- あなたは口座残高、取引履歴、予算、為替レートのデータを保持しています。
+- あなたは口座残高、取引履歴、予算、為替レート、買掛金、売掛金、借入金、投資、デリバティブのデータを保持しています。
 - これらのデータを加工してデータの可視化や分析レポートの作成ができます。
 - 依頼内容をただ対応するだけでなく、背景のニーズに答えられるように回答方針を立ててください。
 
@@ -162,7 +162,7 @@ def refine_prompt_node(state: Dict[str, Any]):
 - 分析にあたり考慮すべき注意点
 """
         refine_llm = ChatOpenAI(
-            model="o3-mini",
+            model="gpt-4.1",
             api_key=llm_client.api_key,
             verbose=True,
         ).with_structured_output(RefinePromptFormat)
@@ -355,6 +355,7 @@ def prepare_node(state: Dict[str, Any]):
                         continue
 
                 with tabs[idx]:
+                    st.info(f"タスク: {task['task']}")
                     st.dataframe(df_output)
 
     except Exception as e:
@@ -463,6 +464,7 @@ def visualize_node(state: Dict[str, Any]):
 
                 # ---------------- コード実行 ----------------
                 with vis_tabs[idx]:
+                    st.info(f"タスク: {task['task']}")
                     # 1回目と2回目の描画が重複しないようにプレースホルダーを用意
                     output_placeholder = st.empty()
 
@@ -502,7 +504,9 @@ def visualize_node(state: Dict[str, Any]):
                         st.error(err)
 
                 # 成否に応じて生成コードを保存
-                st.session_state.generated_codes.append(code_to_run)
+                st.session_state.generated_codes.append(
+                    {"task": task["task"], "code": code_to_run}
+                )
 
                 # ステータス更新
                 st.session_state.plan.loc[
@@ -684,15 +688,40 @@ def main(initial_df_dict: Dict[str, pd.DataFrame]):
             tabs = st.tabs(list(st.session_state.work_df_dict.keys()))
             for idx, (df_name, df_val) in enumerate(st.session_state.work_df_dict.items()):
                 with tabs[idx]:
+                    # plan から該当タスクを検索
+                    task_info = st.session_state.plan[st.session_state.plan["output"] == df_name]
+                    if not task_info.empty:
+                        st.info(f"タスク: {task_info.iloc[0]['task']}")
                     st.dataframe(df_val, use_container_width=True)
 
         # ビジュアル再描画
         if st.session_state.get("generated_codes"):
             st.markdown('<h3 class="section-header">生成されたビジュアル</h3>', unsafe_allow_html=True)
+
+            # planからvisualizeタスクを取得
+            visualize_tasks = []
+            if "plan" in st.session_state:
+                visualize_tasks = st.session_state.plan[st.session_state.plan["category"] == "visualize"].to_dict(orient="records")
+
             vis_tabs = st.tabs([f"visual_{i+1}" for i in range(len(st.session_state.generated_codes))])
-            for idx, gen_code in enumerate(st.session_state.generated_codes):
+            for idx, gen_code_info in enumerate(st.session_state.generated_codes):
                 with vis_tabs[idx]:
                     try:
+                        task_description = "タスクの説明がありません。"
+                        gen_code = ""
+
+                        # 以前の実行結果(str)と新しい形式(dict)の両方に対応
+                        if isinstance(gen_code_info, dict):
+                            task_description = gen_code_info.get("task", task_description)
+                            gen_code = gen_code_info.get("code", "")
+                        else: # 古い形式(str)の場合
+                            gen_code = gen_code_info
+                            # plan からインデックスでタスク情報を取得試行
+                            if idx < len(visualize_tasks):
+                                task_description = visualize_tasks[idx].get("task", task_description)
+
+                        st.info(f"タスク: {task_description}")
+
                         success, stdout, err = st.session_state.code_executor.execute_code(gen_code)
                         if not success and err:
                             st.error(err)
