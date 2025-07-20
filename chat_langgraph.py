@@ -23,8 +23,49 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 ###############################################################################
-# Utility Dataclasses                                                          
+# Context and Utility Dataclasses
 ###############################################################################
+
+class ConversationContext:
+    """
+    一連の分析とチャットのコンテキストを管理するクラス。
+    """
+    def __init__(self):
+        self.user_prompt: str | None = None
+        self.refined_prompt: str | None = None
+        self.plan: pd.DataFrame | None = None
+        self.prepare_results: Dict[str, pd.DataFrame] | None = None
+        self.visualize_results: list[Dict[str, str]] | None = None
+        self.report: str | None = None
+        self.chat_history: list[Dict[str, str]] = []
+
+    def get_full_context_as_string(self) -> str:
+        """
+        保持しているすべてのコンテキストを単一の文字列にフォーマットして返す。
+        """
+        context_parts = []
+        if self.user_prompt:
+            context_parts.append(f"## ユーザーからの元の依頼内容\n{self.user_prompt}")
+        if self.refined_prompt:
+            context_parts.append(f"## 分析方針\n{self.refined_prompt}")
+        if self.plan is not None and not self.plan.empty:
+            context_parts.append(f"## 実行されたタスクプラン\n{self.plan.to_markdown()}")
+        if self.prepare_results:
+            prepared_dfs = ", ".join(self.prepare_results.keys())
+            context_parts.append(f"## タスク(prepare)で生成されたデータ一覧\n{prepared_dfs}")
+        if self.visualize_results:
+            viz_tasks = "\n".join([f"- {res.get('task', 'N/A')}" for res in self.visualize_results])
+            context_parts.append(f"## タスク(visualize)の概要\n{viz_tasks}")
+        if self.report:
+            context_parts.append(f"## 生成されたレポート全文\n{self.report}")
+
+        # チャット履歴を時系列で追加 (最新のユーザー質問は含めない)
+        history_str = "\n".join([f"### {msg['role']}\n{msg['content']}" for msg in self.chat_history[:-1]])
+        if history_str:
+            context_parts.append(f"## これまでのチャット履歴\n{history_str}")
+            
+        return "\n\n---\n\n".join(context_parts)
+
 class Plan(BaseModel):
     category: str
     task: str
@@ -43,17 +84,22 @@ class RefinePromptFormat(BaseModel):
 ###############################################################################
 
 def initialize_session_state(initial_df_dict: Dict[str, pd.DataFrame]):
-    if "initialized" in st.session_state:
-        return
+    # 一度だけ実行される初期化処理
+    if "initialized" not in st.session_state:
+        st.session_state.initial_df_dict = initial_df_dict
+        st.session_state.safety_checker = SafetyChecker()
+        st.session_state.code_executor = CodeExecutor(initial_df_dict)
+        st.session_state.execution_history = []
+        st.session_state.generated_codes = []
+        st.session_state.generated_report = ""
+        st.session_state.work_df_dict: Dict[str, pd.DataFrame] = {}
+        st.session_state.initialized = True
 
-    st.session_state.initial_df_dict = initial_df_dict
-    st.session_state.safety_checker = SafetyChecker()
-    st.session_state.code_executor = CodeExecutor(initial_df_dict)
-    st.session_state.execution_history = []
-    st.session_state.generated_codes = []
-    st.session_state.generated_report = ""
-    st.session_state.work_df_dict: Dict[str, pd.DataFrame] = {}
-    st.session_state.initialized = True
+    # チャット機能追加に伴う state。古いセッションでもエラーにならないように、存在をチェックして初期化する。
+    if "conversation_context" not in st.session_state:
+        st.session_state.conversation_context = ConversationContext()
+    if "messages" not in st.session_state:
+        st.session_state.messages = []
 
 
 def log_execution(prompt: str, code: str, success: bool, error: str | None = None):
@@ -551,13 +597,17 @@ def report_node(state: Dict[str, Any]):
         prompt_for_report = f"""
 あなたは財務分析の経験豊富なデータアナリストです。
 以下のinputのデータをもとに、taskに従って分析レポートを作成してください。
-# task
+
+# ユーザーからの依頼内容
+{st.session_state.user_prompt}
+
+# あなたのタスク
 {task['task']}
 
-# taskの背景
+# あなたのタスクの背景
 {st.session_state.refined_prompt}
 
-# input
+# あなたのタスクのinput
 {input_df_names}
 
 # ここまでのデータ準備の経緯
@@ -589,7 +639,9 @@ inputのデータをよく参照し、taskの背景を踏まえた上で具体�
             st_callback = StreamlitCallbackHandler(st.container())
             res = report_agent.invoke({"input": prompt_for_report}, {"callbacks": [st_callback]})
             st.session_state.generated_report.append(res["output"])
-            st.code(res["output"], language="markdown")
+            #st.markdown(res["output"]) # codeブロックではなくMarkdownで表示
+            with st.expander("レポート"):
+                st.code(res["output"], language="markdown")
 
         st.session_state.plan.loc[
             st.session_state.plan["task"] == task["task"], "status"
@@ -636,18 +688,26 @@ def main(initial_df_dict: Dict[str, pd.DataFrame]):
     user_prompt = st.text_area("依頼内容を入力してください", height=100)
     run_button = st.button("実行", type="primary")
 
-    if run_button and not user_prompt.strip():
-        st.warning("プロンプトを入力してください")
-        return
-
     if run_button:
-        # ユーザープロンプトをセッションにも保持（後続ノード参照用）
+        if not user_prompt.strip():
+            st.warning("プロンプトを入力してください")
+            st.stop()
+
+        # 実行のたびに、前の実行結果とチャット履歴をクリアする
+        st.session_state.messages = []
+        st.session_state.plan = pd.DataFrame()
+        st.session_state.work_df_dict = {}
+        st.session_state.generated_codes = []
+        st.session_state.generated_report = ""
+        st.session_state.refined_prompt = ""
+        st.session_state.conversation_context = ConversationContext()
+        # ユーザープロンプトは上書き
         st.session_state.user_prompt = user_prompt
 
         llm_client = get_llm_client()
         if llm_client is None:
             st.error("API Key を入力してください")
-            return
+            st.stop()
 
         df_overview = get_dataframe_info(
             [
@@ -664,20 +724,33 @@ def main(initial_df_dict: Dict[str, pd.DataFrame]):
                 "df_overview": df_overview,
             }
             flow.invoke(state)
+
+            # --- 全フロー完了後、コンテキストを更新 ---
+            context = st.session_state.conversation_context
+            context.user_prompt = st.session_state.user_prompt
+            context.refined_prompt = st.session_state.get("refined_prompt")
+            context.plan = st.session_state.get("plan")
+            context.prepare_results = st.session_state.get("work_df_dict")
+            context.visualize_results = st.session_state.get("generated_codes")
+            context.report = "\n".join(st.session_state.get("generated_report", []))
+
         except Exception as e:
             # フロー全体で予期せぬ例外が発生した場合でも画面が白くならないようにする
             st.exception(e)
             logger.exception("flow.invoke 失敗")
 
-        st.success("完了しました🎉")
+        st.success("分析が完了しました🎉 レポートに関する追加の質問があれば、下のチャット欄からどうぞ。")
 
     # ------------------------------------------------------------------
-    # ボタン未押下時：既存の生成結果を再描画
+    # ページ表示/再描画 (セッションステートに基づいてUIを構築)
     # ------------------------------------------------------------------
-    if not run_button and "plan" in st.session_state:
-        st.markdown("<h3 class='section-header'>分析方針</h3>", unsafe_allow_html=True)
-        with st.expander("分析方針"):
-            st.markdown(st.session_state.refined_prompt, unsafe_allow_html=True)
+
+    # --- 分析結果の表示 ---
+    if not run_button and "plan" in st.session_state and isinstance(st.session_state.plan, pd.DataFrame) and not st.session_state.plan.empty:
+        if st.session_state.get("refined_prompt"):
+            st.markdown("<h3 class='section-header'>分析方針</h3>", unsafe_allow_html=True)
+            with st.expander("分析方針", expanded=False):
+                st.markdown(st.session_state.refined_prompt, unsafe_allow_html=True)
 
         st.markdown('<h3 class="section-header">タスク一覧</h3>', unsafe_allow_html=True)
         st.dataframe(st.session_state.plan, use_container_width=True)
@@ -697,29 +770,12 @@ def main(initial_df_dict: Dict[str, pd.DataFrame]):
         # ビジュアル再描画
         if st.session_state.get("generated_codes"):
             st.markdown('<h3 class="section-header">生成されたビジュアル</h3>', unsafe_allow_html=True)
-
-            # planからvisualizeタスクを取得
-            visualize_tasks = []
-            if "plan" in st.session_state:
-                visualize_tasks = st.session_state.plan[st.session_state.plan["category"] == "visualize"].to_dict(orient="records")
-
             vis_tabs = st.tabs([f"visual_{i+1}" for i in range(len(st.session_state.generated_codes))])
             for idx, gen_code_info in enumerate(st.session_state.generated_codes):
                 with vis_tabs[idx]:
                     try:
-                        task_description = "タスクの説明がありません。"
-                        gen_code = ""
-
-                        # 以前の実行結果(str)と新しい形式(dict)の両方に対応
-                        if isinstance(gen_code_info, dict):
-                            task_description = gen_code_info.get("task", task_description)
-                            gen_code = gen_code_info.get("code", "")
-                        else: # 古い形式(str)の場合
-                            gen_code = gen_code_info
-                            # plan からインデックスでタスク情報を取得試行
-                            if idx < len(visualize_tasks):
-                                task_description = visualize_tasks[idx].get("task", task_description)
-
+                        task_description = gen_code_info.get("task", "タスクの説明がありません。")
+                        gen_code = gen_code_info.get("code", "")
                         st.info(f"タスク: {task_description}")
 
                         success, stdout, err = st.session_state.code_executor.execute_code(gen_code)
@@ -738,4 +794,84 @@ def main(initial_df_dict: Dict[str, pd.DataFrame]):
         if st.session_state.get("generated_report"):
             st.markdown('<h3 class="section-header">レポート</h3>', unsafe_allow_html=True)
             for report in st.session_state.generated_report:
-                st.code(report, language="markdown")
+                #st.markdown(report)
+                with st.expander("レポート"):
+                    st.code(report, language="markdown")
+
+    # --- チャット入力欄の表示と処理 ---
+    # レポートが生成された後のみチャット機能を有効化
+    is_report_ready = bool(
+        st.session_state.get("conversation_context") and st.session_state.conversation_context.report
+    )
+
+    # --- チャット履歴の表示 ---
+    if is_report_ready:
+        st.divider()
+        st.markdown('<h3 class="section-header">チャット</h3>', unsafe_allow_html=True)
+    for message in st.session_state.messages:
+        with st.chat_message(message["role"]):
+            #st.markdown(report)
+            st.code(message["content"], language="markdown")
+
+    # アシスタントの応答を生成・表示
+    # 最新のメッセージがユーザーからのものであれば、アシスタントが応答する
+    if st.session_state.messages and st.session_state.messages[-1]["role"] == "user":
+        with st.chat_message("assistant"):
+            with st.spinner("思考中..."):
+                st.session_state.conversation_context.chat_history = st.session_state.messages
+                full_context_str = st.session_state.conversation_context.get_full_context_as_string()
+                
+                last_user_prompt = st.session_state.messages[-1]["content"]
+
+                prompt_for_chat = f"""
+あなたは、すでに行われた一連の分析結果を完全に理解した上で、追加の質問に答えるAIアシスタントです。
+以下のコンテキスト情報を踏まえて、ユーザーからの最後の質問に、簡潔かつ的確に回答してください。
+必要であれば、利用可能なDataFrameを分析して回答を生成することもできます。
+
+# コンテキスト
+{full_context_str}
+
+# ユーザーからの最後の質問
+{last_user_prompt}
+"""
+                all_dfs = {**st.session_state.initial_df_dict, **st.session_state.work_df_dict}
+                st.write(all_dfs.keys())
+                chat_agent = create_pandas_dataframe_agent(
+                    llm=ChatOpenAI(model="gpt-4.1", temperature=0, api_key=get_llm_client().api_key),
+                    df=all_dfs,
+                    agent_type="zero-shot-react-description",
+                    verbose=True,
+                    allow_dangerous_code=True,
+                    return_intermediate_steps=True,
+                    agent_executor_kwargs={"handle_parsing_errors": True},
+                    df_exec_instruction=True,
+                )
+
+                # StreamlitCallbackHandler用のコンテナを用意
+                st_callback_container = st.container()
+                st_callback = StreamlitCallbackHandler(st_callback_container, expand_new_thoughts=False)
+                
+                try:
+                    response = chat_agent.invoke(
+                        {"input": prompt_for_chat},
+                        {"callbacks": [st_callback]}
+                    )
+                    response_text = response["output"]
+                except Exception as e:
+                    response_text = f"申し訳ありません、エラーが発生しました: {e}"
+                    logger.error(f"Chat agent invocation failed: {e}")
+                
+                # 最終的な回答を表示
+                st.markdown(response_text)
+                # アシスタントの応答を履歴に追加
+                st.session_state.messages.append({"role": "assistant", "content": response_text})
+
+    # ユーザーからの入力を受け付ける
+    if is_report_ready:
+        if chat_prompt := st.chat_input(
+            "レポートや分析について追加で質問してください", disabled=not is_report_ready
+        ):
+            # ユーザーのメッセージを履歴に追加
+            st.session_state.messages.append({"role": "user", "content": chat_prompt})
+            # 画面を再実行して、ユーザーのメッセージを即時表示
+            st.rerun()
