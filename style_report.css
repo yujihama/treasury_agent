@@ -1,0 +1,62 @@
+/* 基本タイポグラフィ */
+h1, h2, h3, h4, h5, h6 {
+  color: #4F8BF9;
+  margin-top: 1.2em;
+  margin-bottom: 0.6em;
+  font-weight: 600;
+}
+
+p {
+  line-height: 1.7;
+  font-size: 0.95rem;
+  margin: 0 0 0.9rem 0;
+}
+
+/* 汎用カード (:::card ... :::) */
+[data-card], /* div[data-card], section[data-card] など */
+.card {
+  background: #fafafa;
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+  padding: 1.2em;
+  margin-bottom: 1.4em;
+  box-shadow: 2px 2px 4px rgba(0, 0, 0, 0.05);
+}
+
+/* アラート (p data-alert="...") */
+[data-alert="ok"] {
+  background: #e9f9f0;
+  border-left: 4px solid #28c76f;
+  border-radius: 4px;
+  padding: 0.8em 1em;
+}
+
+[data-alert="warn"] {
+  background: #fff7e6;
+  border-left: 4px solid #ff9f43;
+  border-radius: 4px;
+  padding: 0.8em 1em;
+}
+
+[data-alert="info"] {
+  background: #e6f4ff;
+  border-left: 4px solid #00cfe8;
+  border-radius: 4px;
+  padding: 0.8em 1em;
+}
+
+/* テーブル装飾 */
+.table, table {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+.table th, .table td, table th, table td {
+  border: 1px solid #ddd;
+  padding: 8px;
+  text-align: left;
+}
+
+.table th, table th {
+  background-color: #f2f2f2;
+} 

@@ -3,8 +3,10 @@ LLMクライアント機能
 """
 import time
 import logging
+import re  # 追加: 不正なバックスラッシュエスケープを検知するため
 from typing import Optional, Dict, Any
 import streamlit as st
+from pydantic import BaseModel, Field  # 追加: Pydantic モデル用
 
 class LLMClient:
     """
@@ -91,6 +93,25 @@ class LLMClient:
         code = code.strip()
         
         return code
+
+    # ----------------------------------------------------
+    # JSON 文字列内の不正なバックスラッシュエスケープを修正するユーティリティ
+    # ----------------------------------------------------
+    def _sanitize_invalid_escapes(self, content: str) -> str:
+        """JSON テキスト中に現れる無効なバックスラッシュエスケープ (例: \s) を
+        有効な表現 (\\s) に置換する。
+
+        Args:
+            content: LLM から返却された JSON 形式の文字列
+
+        Returns:
+            エスケープシーケンスを修正した文字列
+        """
+        # JSON で許可されているエスケープ文字: " \ / b f n r t u
+        # これ以外の文字がバックスラッシュに続く場合は無効とみなし、
+        # バックスラッシュを二重化することでエスケープを解除する。
+        invalid_escape_pattern = re.compile(r"\\(?![\"\\/bfnrtu])")
+        return invalid_escape_pattern.sub(r"\\\\", content)
     
     def _generate_real_code(self, user_prompt: str, df_info: str) -> str:
         """
@@ -140,6 +161,7 @@ class LLMClient:
    - 適切なタイトルを設定
    - 表示のタイトル等はmarkdownで表示する。トップレベルはst.markdown("##")、サブレベルはst.markdown("###")
    - st.sidebarは禁止
+   - すべての Streamlit ウィジェットには key 引数を指定し、一意になるようタスク名や変数名を含めてください
    - st.sliderを使う場合は、Python 標準の型(int, float, datetime.date, datetime.time, datetime.datetime)である必要があります。
 
 4. 禁止事項：
@@ -158,16 +180,16 @@ class LLMClient:
 """
         
         try:
-            # --- LangChain Structured Output Parser 設定 ---
-            from langchain.output_parsers import StructuredOutputParser, ResponseSchema
+            # --- LangChain PydanticOutputParser 設定 ---
+            from langchain.output_parsers import PydanticOutputParser
 
-            # 出力スキーマ定義
-            response_schemas = [
-                ResponseSchema(name="code", description="Streamlit 用 Python コード (コメント不要)。"),
-                ResponseSchema(name="commentary", description="コードの簡潔な日本語説明。")
-            ]
+            class CodeOutput(BaseModel):
+                """LLM から受け取る構造化出力スキーマ"""
 
-            parser = StructuredOutputParser.from_response_schemas(response_schemas)
+                code: str = Field(description="Streamlit 用 Python コード (コメント不要)。")
+                commentary: str = Field(description="コードの簡潔な日本語説明。")
+
+            parser = PydanticOutputParser(pydantic_object=CodeOutput)
 
             format_instructions = parser.get_format_instructions()
 
@@ -195,9 +217,10 @@ class LLMClient:
             logging.info(f"LLM call completed in {end_time - start_time:.2f}s")
 
             # 構造化出力のパース
+            raw_content = self._sanitize_invalid_escapes(response.content)
             try:
-                parsed = parser.parse(response.content)
-                generated_code = parsed.get("code", "")
+                parsed: CodeOutput = parser.parse(raw_content)
+                generated_code = parsed.code
                 if not generated_code:
                     raise ValueError("'code' フィールドが空です")
             except Exception as parse_err:
@@ -251,6 +274,7 @@ class LLMClient:
 3. 構文エラーがないこと。
 4. 安全性チェック（Forbidden Patterns, AST Import 制限など）を通過すること。
 5. 出力はコードのみ（コメント不要）。マークダウンの ``` は含めないでください。
+6. すべての Streamlit ウィジェットには key 引数を指定し、一意になるようタスク名や変数名を含めてください。
 """
 
         full_prompt = f"""{system_prompt}

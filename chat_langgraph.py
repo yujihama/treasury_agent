@@ -4,7 +4,22 @@ import pandas as pd
 import logging
 from datetime import datetime
 from typing import Dict, Any
-import traceback  # 追加: 詳細なエラーログ出力用
+import traceback 
+
+# 追加: CSS ファイルを読み込んで注入するユーティリティ関数
+CSS_PATH = "style_report.css"
+
+def _inject_report_css():
+    """style_report.css が存在すれば読み込み、<style> タグとして挿入する"""
+    if os.path.exists(CSS_PATH):
+        try:
+            with open(CSS_PATH, "r", encoding="utf-8") as f:
+                css_content = f.read()
+            st.markdown(f"<style>{css_content}</style>", unsafe_allow_html=True)
+        except Exception as css_err:
+            logging.warning(f"CSS 読み込みに失敗: {css_err}")
+    else:
+        logging.info(f"{CSS_PATH} が見つかりませんでした。CSS は読み込まれません。")
 
 from langgraph.graph import StateGraph
 from langchain_openai import ChatOpenAI
@@ -230,6 +245,7 @@ def refine_prompt_node(state: Dict[str, Any]):
 ###############################################################################
 
 def generate_plan_node(state: Dict[str, Any]):
+    st.markdown('<h3 class="section-header">タスク一覧</h3>', unsafe_allow_html=True)
     # refine ノードで詳細化されたプロンプトがあればそちらを優先
     if "refined_prompt" in st.session_state:
         user_prompt: str = st.session_state.refined_prompt
@@ -287,10 +303,6 @@ def generate_plan_node(state: Dict[str, Any]):
         st.session_state.plan = plan_df
 
     # ---------------- 表示プレースホルダ ----------------
-    # DeltaGenerator は再実行ごとに DOM が張り替わるため、古いオブジェクトを保持すると
-    # "'setIn' cannot be called on an ElementNode" でフロントエンドがクラッシュする場合がある。
-    # そのため毎回新しくプレースホルダを生成して session_state に上書き保存する。
-    st.markdown('<h3 class="section-header">タスク一覧</h3>', unsafe_allow_html=True)
     st.session_state.plan_placeholder = st.empty()
     st.session_state.plan_placeholder.dataframe(plan_df, use_container_width=True)
     
@@ -306,87 +318,90 @@ def prepare_node(state: Dict[str, Any]):
     plan_df: pd.DataFrame = state["plan_df"]
     prepare_tasks = plan_df[plan_df["category"] == "prepare"].to_dict(orient="records")
 
-    st.markdown('<h3 class="section-header">生成されたデータ</h3>', unsafe_allow_html=True)
-    tabs = st.tabs([task["output"] for task in prepare_tasks])
+    st.markdown('<h3 class="section-header">データ</h3>', unsafe_allow_html=True)
+    with st.expander("生成されたデータ", expanded=True):
+        # まずタブをすべて描画し、各タブ内にプレースホルダーを用意しておく
+        output_names = [task["output"] for task in prepare_tasks]
+        tabs = st.tabs(output_names)
 
-    work_df_dict: Dict[str, pd.DataFrame] = {}
+        # タブ名 → プレースホルダー の対応表
+        tab_placeholders: Dict[str, Any] = {}
+        for idx, name in enumerate(output_names):
+            with tabs[idx]:
+                # ここでは空のプレースホルダーを作成しておき、後で中身を埋め込む
+                tab_placeholders[name] = st.empty()
 
-    try:
-        for idx, task in enumerate(prepare_tasks):
-            output_df_name = task.get("output")
-            with st.spinner(f"データを生成中[{task['task']}]"):
-                st.session_state.plan.loc[
-                    st.session_state.plan["task"] == task["task"], "status"
-                ] = "🔄"
-                st.session_state.plan_placeholder.dataframe(st.session_state.plan, use_container_width=True)
-
-                input_df_names = task["input"]
-
-                # 入力 df を dict 化（存在するもののみ）
-                input_df_dict: Dict[str, pd.DataFrame] = {}
-                for name in input_df_names:
-                    if name in work_df_dict:
-                        input_df_dict[name] = work_df_dict[name].copy()
-                    elif name in st.session_state.initial_df_dict:
-                        input_df_dict[name] = st.session_state.initial_df_dict[name].copy()
-                    else:
-                        st.warning(f"DataFrame '{name}' が見つかりません。スキップします。")
-
-                if not input_df_dict:
-                    st.error("有効な入力 DataFrame が無いため prepare タスクをスキップします。")
-                    continue
-
-                st_callback = StreamlitCallbackHandler(st.container())
-                prepare_agent = create_pandas_dataframe_agent(
-                    llm=ChatOpenAI(model="gpt-4.1", temperature=0, api_key=get_llm_client().api_key),
-                    df=input_df_dict,
-                    agent_type="zero-shot-react-description",
-                    verbose=True,
-                    allow_dangerous_code=True,
-                    return_intermediate_steps=True,
-                    include_df_in_result=True,
-                    df_exec_instruction=True,
-                    agent_executor_kwargs={"handle_parsing_errors": True},
-                )
-
-                prompt_for_data = f"""
-                            あなたは優秀なデータサイエンティストです。           
-                            以下のtaskに従ってdataframeを作成してください。
-                            # task
-                            {task['task']}
-                            # input
-                            {input_df_names}
-                            # output
-                            {output_df_name}
-                            # output_columns
-                            {input_df_names}のカラム(可能な限り) + {task['output_columns']}
-                            
-                            # 注意点
-                            - まず初めにinputのデータにアクセス可能かhead()で確認してください。アクセス不可の場合のその旨回答して処理を終了してください。
-                            - 変数、中間データフレームは小まめにhead()を実行して想定通り作成されているか確認してください。
-                            - outputを生成したら、以下のように{output_df_name}.jsonという名前で保存してください。
-                            {output_df_name}.to_json(
-                                f"tmp/{output_df_name}.json",
-                                orient="records",
-                                date_format="iso",
-                                date_unit="s",
-                                index=False,
-                                force_ascii=False,
-                            )
-                            """
-
-                prepare_agent.invoke({"input": prompt_for_data}, {"callbacks": [st_callback]})
-
-                # 生成された json を読み込み
-                if os.path.exists(f"tmp/{output_df_name}.json"):
-                    df_output = pd.read_json(f"tmp/{output_df_name}.json", orient="records")
-                    work_df_dict[output_df_name] = df_output
+        work_df_dict: Dict[str, pd.DataFrame] = {}
+         
+        try:
+            for task in prepare_tasks:
+                output_df_name = task.get("output")
+                # 現在処理中のタブのプレースホルダーを取得
+                placeholder = tab_placeholders.get(output_df_name)
+                with st.spinner(f"データを生成中[{task['task']}]"):
                     st.session_state.plan.loc[
-                        st.session_state.plan["output"] == output_df_name, "status"
-                    ] = "✅"
-                else:
+                        st.session_state.plan["task"] == task["task"], "status"
+                    ] = "🔄"
+                    st.session_state.plan_placeholder.dataframe(st.session_state.plan, use_container_width=True)
+
+                    input_df_names = task["input"]
+
+                    # 入力 df を dict 化（存在するもののみ）
+                    input_df_dict: Dict[str, pd.DataFrame] = {}
+                    for name in input_df_names:
+                        if name in work_df_dict:
+                            input_df_dict[name] = work_df_dict[name].copy()
+                        elif name in st.session_state.initial_df_dict:
+                            input_df_dict[name] = st.session_state.initial_df_dict[name].copy()
+                        else:
+                            st.warning(f"DataFrame '{name}' が見つかりません。スキップします。")
+
+                    if not input_df_dict:
+                        st.error("有効な入力 DataFrame が無いため prepare タスクをスキップします。")
+                        continue
+
+                    st_callback = StreamlitCallbackHandler(parent_container = st.container(), max_thought_containers=2, expand_new_thoughts=False)
+                    prepare_agent = create_pandas_dataframe_agent(
+                        llm=ChatOpenAI(model="gpt-4.1", temperature=0, api_key=get_llm_client().api_key),
+                        df=input_df_dict,
+                        agent_type="zero-shot-react-description",
+                        verbose=True,
+                        allow_dangerous_code=True,
+                        return_intermediate_steps=True,
+                        include_df_in_result=True,
+                        df_exec_instruction=True,
+                        agent_executor_kwargs={"handle_parsing_errors": True},
+                    )
+
+                    prompt_for_data = f"""
+                                    あなたは優秀なデータサイエンティストです。           
+                                    以下のtaskに従ってdataframeを作成してください。
+                                    # task
+                                    {task['task']}
+                                    # input
+                                    {input_df_names}
+                                    # output
+                                    {output_df_name}
+                                    # output_columns
+                                    {input_df_names}のカラム(可能な限り) + {task['output_columns']}
+                                    
+                                    # 注意点
+                                    - まず初めにinputのデータにアクセス可能かhead()で確認してください。アクセス不可の場合のその旨回答して処理を終了してください。
+                                    - 変数、中間データフレームは小まめにhead()を実行して想定通り作成されているか確認してください。
+                                    - outputを生成したら、以下のように{output_df_name}.jsonという名前で保存してください。
+                                    {output_df_name}.to_json(
+                                        f"tmp/{output_df_name}.json",
+                                        orient="records",
+                                        date_format="iso",
+                                        date_unit="s",
+                                        index=False,
+                                        force_ascii=False,
+                                    )
+                                    """
+
                     prepare_agent.invoke({"input": prompt_for_data}, {"callbacks": [st_callback]})
 
+                    # 生成された json を読み込み
                     if os.path.exists(f"tmp/{output_df_name}.json"):
                         df_output = pd.read_json(f"tmp/{output_df_name}.json", orient="records")
                         work_df_dict[output_df_name] = df_output
@@ -394,30 +409,40 @@ def prepare_node(state: Dict[str, Any]):
                             st.session_state.plan["output"] == output_df_name, "status"
                         ] = "✅"
                     else:
-                        st.error(f"DataFrame '{output_df_name}' の生成に失敗しました。")
-                        st.session_state.plan.loc[
-                            st.session_state.plan["output"] == output_df_name, "status"
-                        ] = "❌"
-                        continue
+                        prepare_agent.invoke({"input": prompt_for_data}, {"callbacks": [st_callback]})
 
-                with tabs[idx]:
-                    st.info(f"タスク: {task['task']}")
-                    st.dataframe(df_output)
+                        if os.path.exists(f"tmp/{output_df_name}.json"):
+                            df_output = pd.read_json(f"tmp/{output_df_name}.json", orient="records")
+                            work_df_dict[output_df_name] = df_output
+                            st.session_state.plan.loc[
+                                st.session_state.plan["output"] == output_df_name, "status"
+                            ] = "✅"
+                        else:
+                            st.error(f"DataFrame '{output_df_name}' の生成に失敗しました。")
+                            st.session_state.plan.loc[
+                                st.session_state.plan["output"] == output_df_name, "status"
+                            ] = "❌"
+                            continue
 
-    except Exception as e:
-        # 例外発生時にトレースバックを取得して画面とログに出力
-        st.exception(e)
-        logger.exception("prepare タスク失敗")
+                    # 生成結果を該当タブに描画
+                    if placeholder is not None:
+                        with placeholder.container():
+                            st.info(f"タスク: {task['task']}")
+                            st.dataframe(df_output[:100], use_container_width=True)
 
-        # task または output 名で安全にステータス更新
-        if output_df_name:
-            st.session_state.plan.loc[
-                st.session_state.plan["output"] == output_df_name, "status"
-            ] = "❌"
-        else:
-            st.session_state.plan.loc[
-                st.session_state.plan["task"] == task["task"], "status"
-            ] = "❌"
+        except Exception as e:
+            # 例外発生時にトレースバックを取得して画面とログに出力
+            st.exception(e)
+            logger.exception("prepare タスク失敗")
+            # task または output 名で安全にステータス更新 (例外時のみ)
+            if output_df_name:
+                st.session_state.plan.loc[
+                    st.session_state.plan["output"] == output_df_name, "status"
+                ] = "❌"
+            else:
+                st.session_state.plan.loc[
+                    st.session_state.plan["task"] == task["task"], "status"
+                ] = "❌"
 
     st.session_state.plan_placeholder.dataframe(st.session_state.plan, use_container_width=True)
 
@@ -466,105 +491,107 @@ def visualize_node(state: Dict[str, Any]):
             logger.exception("fix_code 失敗")
             return None
 
-    st.markdown('<h3 class="section-header">生成されたビジュアル</h3>', unsafe_allow_html=True)
-    vis_tabs = st.tabs([f"visual_{i+1}" for i in range(len(visualize_tasks))])
+    st.markdown('<h3 class="section-header">ビジュアル</h3>', unsafe_allow_html=True)
+    with st.expander("生成されたビジュアル", expanded=True):
+        vis_tabs = st.tabs([f"visual_{i+1}" for i in range(len(visualize_tasks))])
 
-    for idx, task in enumerate(visualize_tasks):
-        try:
-            with st.spinner(f"ビジュアルを生成中[{task['task']}]"):
-                st.session_state.plan.loc[
-                    st.session_state.plan["task"] == task["task"], "status"
-                ] = "🔄"
-                st.session_state.plan_placeholder.dataframe(st.session_state.plan, use_container_width=True)
-
-                input_df_names = task["input"]
-                input_df_list = []
-                for name in input_df_names:
-                    df_val = st.session_state.work_df_dict.get(name, st.session_state.initial_df_dict.get(name))
-                    if df_val is None:
-                        st.warning(f"DataFrame '{name}' が見つかりません。ビジュアル生成をスキップします。")
-                        continue
-                    input_df_list.append({"input_name": name, "input_df": df_val})
-                df_info = get_dataframe_info(input_df_list)
-
-                if not input_df_list:
-                    continue
-
-                generated_code = get_llm_client().generate_code(task, df_info)
-
-                # ---------------- 安全性チェック ----------------
-                replaced_generated_code = replace_df_references(generated_code, input_df_names)
-                is_safe, _ = st.session_state.safety_checker.is_safe(replaced_generated_code)
-
-                code_to_run = replaced_generated_code
-                if not is_safe:
-                    fixed = fix_code(replaced_generated_code, "安全性チェックに失敗しました", task, df_info)
-                    if fixed is None:
-                        # 修正出来なかった場合はタスク失敗扱い
+        for idx, task in enumerate(visualize_tasks):
+            try:
+                with vis_tabs[idx]:
+                    with st.spinner(f"ビジュアルを生成中[{task['task']}]"):
                         st.session_state.plan.loc[
                             st.session_state.plan["task"] == task["task"], "status"
-                        ] = "❌"
+                        ] = "🔄"
                         st.session_state.plan_placeholder.dataframe(st.session_state.plan, use_container_width=True)
-                        continue
-                    code_to_run = fixed
 
-                # ---------------- コード実行 ----------------
-                with vis_tabs[idx]:
-                    st.info(f"タスク: {task['task']}")
-                    # 1回目と2回目の描画が重複しないようにプレースホルダーを用意
-                    output_placeholder = st.empty()
+                        input_df_names = task["input"]
+                        input_df_list = []
+                        for name in input_df_names:
+                            df_val = st.session_state.work_df_dict.get(name, st.session_state.initial_df_dict.get(name))
+                            if df_val is None:
+                                st.warning(f"DataFrame '{name}' が見つかりません。ビジュアル生成をスキップします。")
+                                continue
+                            input_df_list.append({"input_name": name, "input_df": df_val})
+                        df_info = get_dataframe_info(input_df_list)
 
-                    def run_and_render(code: str, suffix: str = "") -> tuple[bool, str | None, str | None]:
-                        """コードを実行し、プレースホルダーに描画する共通関数"""
-                        # 既存の描画をクリア
-                        output_placeholder.empty()
-                        with output_placeholder.container():
-                            success_inner, stdout_inner, err_inner = (
-                                st.session_state.code_executor.execute_code(code)
-                            )
+                        if not input_df_list:
+                            continue
 
-                            # ログ出力
-                            if stdout_inner:
-                                with st.expander(f"log{suffix}"):
-                                    st.text(stdout_inner)
+                        generated_code = get_llm_client().generate_code(task, df_info)
 
-                            # 実行したコード表示
-                            with st.expander(f"code{suffix}"):
-                                st.code(code, language="python")
+                        # ---------------- 安全性チェック ----------------
+                        replaced_generated_code = replace_df_references(generated_code, input_df_names)
+                        is_safe, _ = st.session_state.safety_checker.is_safe(replaced_generated_code)
 
-                        return success_inner, stdout_inner, err_inner
+                        code_to_run = replaced_generated_code
+                        if not is_safe:
+                            fixed = fix_code(replaced_generated_code, "安全性チェックに失敗しました", task, df_info)
+                            if fixed is None:
+                                # 修正出来なかった場合はタスク失敗扱い
+                                st.session_state.plan.loc[
+                                    st.session_state.plan["task"] == task["task"], "status"
+                                ] = "❌"
+                                st.session_state.plan_placeholder.dataframe(st.session_state.plan, use_container_width=True)
+                                continue
+                            code_to_run = fixed
 
-                    # 1 回目の実行
-                    success, stdout, err = run_and_render(code_to_run)
+                    # ---------------- コード実行 ----------------
+                    with vis_tabs[idx]:
+                        st.info(f"タスク: {task['task']}")
+                        # 1回目と2回目の描画が重複しないようにプレースホルダーを用意
+                        output_placeholder = st.empty()
 
-                    # 実行失敗時の自動修正
-                    if not success and err:
-                        fixed = fix_code(code_to_run, err, task, df_info)
-                        if fixed:
-                            # 2 回目の実行（修正後）
-                            success, stdout, err = run_and_render(fixed, "(修正後)")
-                            code_to_run = fixed  # 成功すれば code を更新
+                        def run_and_render(code: str, suffix: str = "") -> tuple[bool, str | None, str | None]:
+                            """コードを実行し、プレースホルダーに描画する共通関数"""
+                            # 既存の描画をクリア
+                            output_placeholder.empty()
+                            with output_placeholder.container():
+                                success_inner, stdout_inner, err_inner = (
+                                    st.session_state.code_executor.execute_code(code)
+                                )
 
-                    # 2 回目でも失敗した場合はエラーメッセージ表示
-                    if not success and err:
-                        st.error(err)
+                                # ログ出力
+                                if stdout_inner:
+                                    with st.expander(f"log{suffix}"):
+                                        st.text(stdout_inner)
 
-                # 成否に応じて生成コードを保存
-                st.session_state.generated_codes.append(
-                    {"task": task["task"], "code": code_to_run}
-                )
+                                # 実行したコード表示
+                                with st.expander(f"code{suffix}"):
+                                    st.code(code, language="python")
 
-                # ステータス更新
+                            return success_inner, stdout_inner, err_inner
+
+                        # 1 回目の実行
+                        success, stdout, err = run_and_render(code_to_run)
+
+                        # 実行失敗時の自動修正
+                        if not success and err:
+                            fixed = fix_code(code_to_run, err, task, df_info)
+                            if fixed:
+                                # 2 回目の実行（修正後）
+                                success, stdout, err = run_and_render(fixed, "(修正後)")
+                                code_to_run = fixed  # 成功すれば code を更新
+
+                        # 2 回目でも失敗した場合はエラーメッセージ表示
+                        if not success and err:
+                            st.error(err)
+
+                    # 成否に応じて生成コードを保存
+                    st.session_state.generated_codes.append(
+                        {"task": task["task"], "code": code_to_run}
+                    )
+
+                    # ステータス更新
+                    st.session_state.plan.loc[
+                        st.session_state.plan["task"] == task["task"], "status"
+                    ] = "✅" if success else "❌"
+            except Exception as e:
+                st.error(f"visualize 実行失敗: {e}")
                 st.session_state.plan.loc[
                     st.session_state.plan["task"] == task["task"], "status"
-                ] = "✅" if success else "❌"
-        except Exception as e:
-            st.error(f"visualize 実行失敗: {e}")
-            st.session_state.plan.loc[
-                st.session_state.plan["task"] == task["task"], "status"
-            ] = "❌"
- 
-        st.session_state.plan_placeholder.dataframe(st.session_state.plan, use_container_width=True)
+                ] = "❌"
+    
+            st.session_state.plan_placeholder.dataframe(st.session_state.plan, use_container_width=True)
 
     state["generated_codes"] = st.session_state.generated_codes
     return state
@@ -621,6 +648,8 @@ inputのデータをよく参照し、taskの背景を踏まえた上で具体�
 - 推測で回答せず、PythonAstREPLToolを使用してinputのデータに対して分析を行い、確認して示唆に富んだ観点を示してください。
 - 具体的な数値など定量的なデータも根拠に結論を示してください。
 - レポートはmarkdown形式で作成してください。
+- セクションは必ず `<div data-card>` と `</div>` で囲み、カード形式で視覚的に区切ってください。
+- 強調または警告メッセージには `<p data-alert="ok|warn|info"> ... </p>` を使用してください。
 - エグゼクティブサマリー、分析方法、分析結果、発見事項、分析で使用したデータを含めてください。
 """
         st.markdown('<h3 class="section-header">レポート</h3>', unsafe_allow_html=True)
@@ -636,12 +665,12 @@ inputのデータをよく参照し、taskの背景を踏まえた上で具体�
             agent_executor_kwargs={"handle_parsing_errors": True},
             )
         with st.spinner(f"レポートを生成中[{task['task']}]"):
-            st_callback = StreamlitCallbackHandler(st.container())
+            st_callback = StreamlitCallbackHandler(parent_container = st.container(), max_thought_containers=2, expand_new_thoughts=False)
             res = report_agent.invoke({"input": prompt_for_report}, {"callbacks": [st_callback]})
             st.session_state.generated_report.append(res["output"])
             #st.markdown(res["output"]) # codeブロックではなくMarkdownで表示
             with st.expander("レポート"):
-                st.code(res["output"], language="markdown")
+                st.markdown(res["output"], unsafe_allow_html=True)
 
         st.session_state.plan.loc[
             st.session_state.plan["task"] == task["task"], "status"
@@ -683,6 +712,8 @@ def build_flow():
 
 def main(initial_df_dict: Dict[str, pd.DataFrame]):
     st.set_page_config(page_title="Streamlit Agent (LangGraph)", layout="wide")
+    # --- 追加: CSS を注入 ---
+    _inject_report_css()
     initialize_session_state(initial_df_dict)
 
     user_prompt = st.text_area("依頼内容を入力してください", height=100)
@@ -739,7 +770,7 @@ def main(initial_df_dict: Dict[str, pd.DataFrame]):
             st.exception(e)
             logger.exception("flow.invoke 失敗")
 
-        st.success("分析が完了しました🎉 レポートに関する追加の質問があれば、下のチャット欄からどうぞ。")
+        st.success("分析が完了しました")
 
     # ------------------------------------------------------------------
     # ページ表示/再描画 (セッションステートに基づいてUIを構築)
@@ -757,38 +788,40 @@ def main(initial_df_dict: Dict[str, pd.DataFrame]):
 
         # 生成データ
         if st.session_state.get("work_df_dict"):
-            st.markdown('<h3 class="section-header">生成されたデータ</h3>', unsafe_allow_html=True)
-            tabs = st.tabs(list(st.session_state.work_df_dict.keys()))
-            for idx, (df_name, df_val) in enumerate(st.session_state.work_df_dict.items()):
-                with tabs[idx]:
-                    # plan から該当タスクを検索
-                    task_info = st.session_state.plan[st.session_state.plan["output"] == df_name]
-                    if not task_info.empty:
-                        st.info(f"タスク: {task_info.iloc[0]['task']}")
-                    st.dataframe(df_val, use_container_width=True)
+            st.markdown('<h3 class="section-header">データ</h3>', unsafe_allow_html=True)
+            with st.expander("生成されたデータ"):
+                tabs = st.tabs(list(st.session_state.work_df_dict.keys()))
+                for idx, (df_name, df_val) in enumerate(st.session_state.work_df_dict.items()):
+                    with tabs[idx]:
+                        # plan から該当タスクを検索
+                        task_info = st.session_state.plan[st.session_state.plan["output"] == df_name]
+                        if not task_info.empty:
+                            st.info(f"タスク: {task_info.iloc[0]['task']}")
+                        st.dataframe(df_val[:100], use_container_width=True, )
 
         # ビジュアル再描画
         if st.session_state.get("generated_codes"):
-            st.markdown('<h3 class="section-header">生成されたビジュアル</h3>', unsafe_allow_html=True)
-            vis_tabs = st.tabs([f"visual_{i+1}" for i in range(len(st.session_state.generated_codes))])
-            for idx, gen_code_info in enumerate(st.session_state.generated_codes):
-                with vis_tabs[idx]:
-                    try:
-                        task_description = gen_code_info.get("task", "タスクの説明がありません。")
-                        gen_code = gen_code_info.get("code", "")
-                        st.info(f"タスク: {task_description}")
+            st.markdown('<h3 class="section-header">ビジュアル</h3>', unsafe_allow_html=True)
+            with st.expander("生成されたビジュアル"):
+                vis_tabs = st.tabs([f"visual_{i+1}" for i in range(len(st.session_state.generated_codes))])
+                for idx, gen_code_info in enumerate(st.session_state.generated_codes):
+                    with vis_tabs[idx]:
+                        try:
+                            task_description = gen_code_info.get("task", "タスクの説明がありません。")
+                            gen_code = gen_code_info.get("code", "")
+                            st.info(f"タスク: {task_description}")
 
-                        success, stdout, err = st.session_state.code_executor.execute_code(gen_code)
-                        if not success and err:
-                            st.error(err)
-                        if stdout:
-                            with st.expander("log"):
-                                st.text(stdout)
-                        with st.expander("code"):
-                            st.code(gen_code, language="python")
+                            success, stdout, err = st.session_state.code_executor.execute_code(gen_code)
+                            if not success and err:
+                                st.error(err)
+                            if stdout:
+                                with st.expander("log"):
+                                    st.text(stdout)
+                            with st.expander("code"):
+                                st.code(gen_code, language="python")
 
-                    except Exception as e:
-                        st.error(f"再描画失敗: {e}")
+                        except Exception as e:
+                            st.error(f"再描画失敗: {e}")
 
         # レポート
         if st.session_state.get("generated_report"):
@@ -796,7 +829,7 @@ def main(initial_df_dict: Dict[str, pd.DataFrame]):
             for report in st.session_state.generated_report:
                 #st.markdown(report)
                 with st.expander("レポート"):
-                    st.code(report, language="markdown")
+                    st.markdown(report, unsafe_allow_html=True)
 
     # --- チャット入力欄の表示と処理 ---
     # レポートが生成された後のみチャット機能を有効化
@@ -810,8 +843,7 @@ def main(initial_df_dict: Dict[str, pd.DataFrame]):
         st.markdown('<h3 class="section-header">チャット</h3>', unsafe_allow_html=True)
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
-            #st.markdown(report)
-            st.code(message["content"], language="markdown")
+            st.markdown(message["content"], unsafe_allow_html=True)
 
     # アシスタントの応答を生成・表示
     # 最新のメッセージがユーザーからのものであれば、アシスタントが応答する
@@ -824,8 +856,8 @@ def main(initial_df_dict: Dict[str, pd.DataFrame]):
                 last_user_prompt = st.session_state.messages[-1]["content"]
 
                 prompt_for_chat = f"""
-あなたは、すでに行われた一連の分析結果を完全に理解した上で、追加の質問に答えるAIアシスタントです。
-以下のコンテキスト情報を踏まえて、ユーザーからの最後の質問に、簡潔かつ的確に回答してください。
+あなたは、すでに行われた一連の分析結果を完全に理解した上で、追加の質問に答えるデータアナリストです。
+以下のコンテキスト情報を踏まえて、ユーザーからの最後の質問に、詳細かつ的確に回答してください。
 必要であれば、利用可能なDataFrameを分析して回答を生成することもできます。
 
 # コンテキスト
@@ -833,9 +865,11 @@ def main(initial_df_dict: Dict[str, pd.DataFrame]):
 
 # ユーザーからの最後の質問
 {last_user_prompt}
+
+**ユーザーの質問の意図を推測して、分析の過程で生成されたDataFrameをしっかりと確認したうえで論理的に回答してください。**
+
 """
                 all_dfs = {**st.session_state.initial_df_dict, **st.session_state.work_df_dict}
-                st.write(all_dfs.keys())
                 chat_agent = create_pandas_dataframe_agent(
                     llm=ChatOpenAI(model="gpt-4.1", temperature=0, api_key=get_llm_client().api_key),
                     df=all_dfs,
@@ -849,20 +883,22 @@ def main(initial_df_dict: Dict[str, pd.DataFrame]):
 
                 # StreamlitCallbackHandler用のコンテナを用意
                 st_callback_container = st.container()
-                st_callback = StreamlitCallbackHandler(st_callback_container, expand_new_thoughts=False)
+                st_callback = StreamlitCallbackHandler(parent_container = st_callback_container, max_thought_containers=2, expand_new_thoughts=False)
                 
                 try:
-                    response = chat_agent.invoke(
+                    # stream() は generator を返すため、そのままでは dict アクセスできず例外となる。
+                    # エンドツーエンドで一括応答を得る場合は invoke() を使用する。
+                    response_dict = chat_agent.invoke(
                         {"input": prompt_for_chat},
                         {"callbacks": [st_callback]}
                     )
-                    response_text = response["output"]
+                    response_text = response_dict.get("output", "")
                 except Exception as e:
                     response_text = f"申し訳ありません、エラーが発生しました: {e}"
                     logger.error(f"Chat agent invocation failed: {e}")
                 
                 # 最終的な回答を表示
-                st.markdown(response_text)
+                st.markdown(response_text, unsafe_allow_html=True)
                 # アシスタントの応答を履歴に追加
                 st.session_state.messages.append({"role": "assistant", "content": response_text})
 
