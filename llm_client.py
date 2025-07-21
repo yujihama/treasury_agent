@@ -107,9 +107,6 @@ class LLMClient:
         Returns:
             エスケープシーケンスを修正した文字列
         """
-        # JSON で許可されているエスケープ文字: " \ / b f n r t u
-        # これ以外の文字がバックスラッシュに続く場合は無効とみなし、
-        # バックスラッシュを二重化することでエスケープを解除する。
         invalid_escape_pattern = re.compile(r"\\(?![\"\\/bfnrtu])")
         return invalid_escape_pattern.sub(r"\\\\", content)
     
@@ -137,17 +134,8 @@ class LLMClient:
    - datetime
    - math
    - statistics
-   - collections
    - matplotlib (plt, matplotlib.pyplot)
    - seaborn (sns)
-   - altair
-   - vega_datasets
-   - bokeh
-   - holoviews
-   - hvplot
-   - pydeck
-   - pyecharts
-   - folium
    - geopandas
    - sklearn (scikit_learn)
    - PIL (Pillow)
@@ -158,11 +146,11 @@ class LLMClient:
 3. 出力形式：
    - streamlitで描画可能なコード(st.から始まるメソッド)を使用
    - データフレームにあるカラムで可能な限りフィルタなどインタラクティブな操作ができるようにする
-   - 適切なタイトルを設定
    - 表示のタイトル等はmarkdownで表示する。トップレベルはst.markdown("##")、サブレベルはst.markdown("###")
    - st.sidebarは禁止
    - すべての Streamlit ウィジェットには key 引数を指定し、一意になるようタスク名や変数名を含めてください
    - st.sliderを使う場合は、Python 標準の型(int, float, datetime.date, datetime.time, datetime.datetime)である必要があります。
+   - st.sliderやfilterやselectboxを使う場合は、目的に沿った適切なデフォルト値を設定してください。
 
 4. 禁止事項：
    - ファイル操作

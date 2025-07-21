@@ -77,8 +77,12 @@ def main():
         file_configs = [
             ("balances", "口座残高CSV", "口座残高データをアップロードしてください"),
             ("transactions", "取引履歴CSV", "取引履歴データをアップロードしてください"),
-            ("budgets", "予算CSV", "予算データをアップロードしてください"),
-            ("fx_rates", "為替レートCSV", "為替レートデータをアップロードしてください")
+            ("fx_rates", "為替レートCSV", "為替レートデータをアップロードしてください"),
+            ("payables", "買掛金CSV", "買掛金データをアップロードしてください"),
+            ("receivables", "売掛金CSV", "売掛金データをアップロードしてください"),
+            ("loans", "借入金CSV", "借入金データをアップロードしてください"),
+            ("investments", "投資CSV", "投資データをアップロードしてください"),
+            ("derivatives", "デリバティブCSV", "デリバティブデータをアップロードしてください")
         ]
         
         for key, label, help_text in file_configs:
@@ -111,7 +115,6 @@ def load_data(uploaded_files, use_sample_data):
     dataframes = {
         'balances': pd.DataFrame(),
         'transactions': pd.DataFrame(),
-        'budgets': pd.DataFrame(),
         'fx_rates': pd.DataFrame(),
         # 追加データセット
         'payables': pd.DataFrame(),  # accounts payable
@@ -147,7 +150,6 @@ def load_data(uploaded_files, use_sample_data):
     file_labels = {
         'balances': '口座残高',
         'transactions': '取引履歴',
-        'budgets': '予算',
         'fx_rates': '為替レート',
         'payables': '買掛金',
         'receivables': '売掛金',
@@ -379,7 +381,6 @@ def display_data_viewer(dataframes):
     data_labels = {
         'balances': 'Balance Data',
         'transactions': 'Transaction Data',
-        'budgets': 'Budget Data',
         'fx_rates': 'FX Rate Data',
         # 追加データ
         'payables': 'Accounts Payable Data',

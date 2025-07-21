@@ -186,7 +186,7 @@ def create_pandas_dataframe_agent(
     input_variables: Optional[List[str]] = None,
     verbose: bool = False,
     return_intermediate_steps: bool = False,
-    max_iterations: Optional[int] = 25,
+    max_iterations: Optional[int] = 50,
     max_execution_time: Optional[float] = None,
     early_stopping_method: str = "force",
     agent_executor_kwargs: Optional[Dict[str, Any]] = None,
@@ -328,10 +328,12 @@ def create_pandas_dataframe_agent(
     
     if df_exec_instruction:
         _force_df_exec_instruction = (
-            "各ステップ最後に必ず PythonAstREPLTool を使用して 中間成果物のDataFrameに対してhead()を実行し、DataFrameが正常に生成されている旨回答してください。"
-            "NameError: name XX is not defined が発生した場合は、PythonAstREPLToolの仕様によりそのXXを定義している処理の直後にprint(XX)を追加すると解消することがあります。"
-            "\n例:\n\n    def get_XXX(...):\n        ...\n    print(get_XXX)  # 関数オブジェクトや変数を評価して環境に残す\n\nこうして同じ呼び出し内で続けて apply などを実行すると NameError を防げます。"
-            "あるいは関数定義とそれを用いた処理(例: apply まで)を 1 つの PythonAstREPLTool 呼び出しにまとめて実行する方法でも同様に NameError を回避できます。"
+            "- PythonAstREPLToolで実行するpythonコードは、「|」を付けないでください。"
+            "- 各ステップ最後に必ず PythonAstREPLTool を使用して 中間成果物のDataFrameに対してhead()を実行し、DataFrameが正常に生成されている旨回答してください。"
+            "- NameError: name XX is not defined が発生した場合は、PythonAstREPLToolの仕様によりそのXXを定義している処理の直後にprint(XX)を追加すると解消することがあります。"
+            "   \n例:\n\n    def get_XXX(...):\n        ...\n    print(get_XXX)  # 関数オブジェクトや変数を評価して環境に残す\n\nこうして同じ呼び出し内で続けて apply などを実行すると NameError を防げます。"
+            "   \nあるいは関数定義とそれを用いた処理(例: apply まで)を 1 つの PythonAstREPLTool 呼び出しにまとめて実行する方法でも同様に NameError を回避できます。"
+            "- 同様のエラーが続いて解消できない場合は、視点を変えたアプローチで再実施してください。"
         )
     else:
         _force_df_exec_instruction = ""
