@@ -7,6 +7,7 @@ from typing import Dict, Any
 import traceback 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from langchain.callbacks.base import BaseCallbackHandler
+from time import sleep
 
 # 追加: CSS ファイルを読み込んで注入するユーティリティ関数
 CSS_PATH = "style_report.css"
@@ -94,7 +95,9 @@ class ResponseFormatter(BaseModel):
     plans: list[Plan]
 
 class RefinePromptFormat(BaseModel):
-    refined_prompt: str
+    need_clarification: bool
+    questions: list[str] | None = None
+    refined_prompt: str | None = None
 
 ###############################################################################
 # Session Helpers                                                              
@@ -119,6 +122,8 @@ def initialize_session_state(initial_df_dict: Dict[str, pd.DataFrame]):
         st.session_state.messages = []
     if "app_status" not in st.session_state:
         st.session_state.app_status = "initial"
+    if "clarification_history" not in st.session_state:
+        st.session_state.clarification_history = []
 
 
 def log_execution(prompt: str, code: str, success: bool, error: str | None = None):
@@ -133,10 +138,25 @@ def log_execution(prompt: str, code: str, success: bool, error: str | None = Non
     )
 
 
+# DF名と日本語解説のマッピング
+DF_DESCRIPTIONS = {
+    'balances': '口座残高データ',
+    'transactions': '取引履歴データ',
+    'fx_rates': '為替レート',
+    'payables': '買掛金データ',
+    'receivables': '売掛金データ',
+    'loans': '借入金データ',
+    'investments': '投資データ',
+    'derivatives': 'デリバティブデータ',
+}
+
+
 def get_dataframe_info(df_list: list[dict[str, pd.DataFrame]]) -> str:
     info = ""
     for df_info in df_list:
-        info += f"input_name: {df_info['input_name']}\n"
+        df_name = df_info["input_name"]
+        description = DF_DESCRIPTIONS.get(df_name, "説明なし")
+        info += f"input_name: {df_name} ({description})\n"
         if isinstance(df_info["input_df"], pd.DataFrame):
             info += f"Shape: {df_info['input_df'].shape}\n"
             info += f"Columns: {', '.join(df_info['input_df'].columns)}\n"
@@ -145,6 +165,7 @@ def get_dataframe_info(df_list: list[dict[str, pd.DataFrame]]) -> str:
                 info += f"  {col}: {dtype}\n"
         else:
             info += f"len(input_df): {len(df_info['input_df'])}\n"
+        info += "\n"
     return info
 
 
@@ -368,54 +389,78 @@ def get_llm_client() -> LLMClient | None:
 
 def refine_prompt_node(state: Dict[str, Any]):
     """
-    ユーザーの入力(依頼内容)をLLMで詳細化し、後続ノードが利用できるよう
-    state["refined_prompt"] として格納する。
-    API Key が未設定の場合は詳細化をスキップし、元の入力をそのまま渡す。
+    ユーザーの入力(依頼内容)と対話履歴を元にLLMで詳細化し、
+    必要に応じて追加の質問を生成するか、分析方針を確定する。
     """
     user_prompt: str = state["user_prompt"]
+    clarification_history: list[Dict[str, str]] = state.get("clarification_history", [])
 
     llm_client = get_llm_client()
-    # API Key が無い場合は詳細化せずにスキップ
     if llm_client is None:
         state["refined_prompt"] = user_prompt
+        state["need_clarification"] = False
+        state["questions"] = None
         return state
 
-    with st.spinner("依頼内容を詳細化しています"):
-        refine_prompt_text = f"""
+    history_str = "\n".join(
+        [f"Assistant: {msg['content']}" if msg['role'] == 'assistant' 
+         else f"User: {msg['content']}" for msg in clarification_history]
+    )
+
+    input_df_list = [{"input_name": n, "input_df": df} for n, df in st.session_state.initial_df_dict.items()]
+    df_info = get_dataframe_info(input_df_list)
+
+    refine_prompt_text = f"""
 あなたは優秀なトレジャリーマネジメントの専門家です。
-以下の依頼内容をよく理解し、背景や意図を踏まえて回答のための分析方針を詳細化してマークダウン形式で回答してください。
+以下の依頼内容とこれまでの質疑応答を踏まえ、分析方針を立ててください。
+
 # 依頼内容
 {user_prompt}
 
-# 前提
+# インプットデータの概要
+{df_info}
+
+# これまでの質疑応答
+{history_str if history_str else "なし"}
+
+# あなたのタスク
+1. 依頼内容と質疑応答を理解し、インプットデータを使った分析方針を明確にします。
+2. 不明な点があれば具体的な質問を生成してください。ある程度推測できる内容は質問しないか、クローズドクエスチョンにしてください。
+3. 質問は丁寧でプロフェッショナルな口調で行ってください。
+4. すべての情報が揃っている場合は、背景や意図を踏まえた詳細な分析方針をマークダウン形式で作成してください。
+
+# 重要ルール
+- **`# これまでの質疑応答` で解決済みの内容は、再度同じ内容の質問をしないでください。**
+- あなたの最終目的は、ユーザーとの対話を通じてあいまいさをなくし、インプットデータを使った実行可能な分析方針（`refined_prompt`）を完成させることです。
+- 一度に全て質問はせず、1,2個程度ずつ質問してください。
+
+# 考慮事項
 - あなたは口座残高、取引履歴、為替レート、買掛金、売掛金、借入金、投資、デリバティブのデータを保持しています。
 - これらのデータを加工してデータの可視化や分析レポートの作成ができます。
 - 依頼内容をただ対応するだけでなく、背景のニーズに答えられるように回答方針を立ててください。
 
-# 回答フォーマット(前後の説明などは不要です。以下のフォーマットのみを回答してください。)
-- 詳細化した依頼内容
-- 分析の具体的手法
-- 可視化のアイデア
-- 分析結果で記述するポイント
-- 分析にあたり考慮すべき注意点
+# 出力フォーマット
+必ず以下のJSON形式で回答してください。説明は不要です。
+- 依頼内容を分析するのに情報が不足している場合:
+  `{{"need_clarification": true, "questions": ["具体的な質問1", "具体的な質問2", ...]}}`
+- 分析方針を立てるのに十分な情報がある場合:
+  `{{"need_clarification": false, "refined_prompt": "## 分析方針\\n..."}}`
 """
-        refine_llm = ChatOpenAI(
-            model="gpt-4.1",
-            api_key=llm_client.api_key,
-            verbose=True,
-        ).with_structured_output(RefinePromptFormat)
-        response = refine_llm.invoke(refine_prompt_text)
-        refined_prompt = response.refined_prompt
-
-    # 詳細化結果を画面に表示
-    # st.markdown("<h3 class='section-header'>分析方針</h3>", unsafe_allow_html=True)
-    state["refined_prompt"] = refined_prompt
-    st.session_state.refined_prompt = refined_prompt
+    refine_llm = ChatOpenAI(
+        model="gpt-4.1",
+        api_key=llm_client.api_key,
+        verbose=True,
+    ).with_structured_output(RefinePromptFormat)
     
-    # with st.expander("分析方針"):
-    #     st.markdown(st.session_state.refined_prompt, unsafe_allow_html=True)
-
+    response = refine_llm.invoke(refine_prompt_text)
+    
+    state["need_clarification"] = response.need_clarification
+    state["questions"] = response.questions
+    state["refined_prompt"] = response.refined_prompt
+    
+    # このノードはStreamlitのUI要素を直接操作しない
     return state
+
 
 ###############################################################################
 # Plan 生成ノード                                                              
@@ -431,58 +476,52 @@ def generate_plan_node(state: Dict[str, Any]):
         user_prompt: str = st.session_state.user_prompt
     df_overview: str = state["df_overview"]
 
-    with st.spinner("タスクを生成中"):
-        plan_prompt_text = f"""
-    あなたは経営者の意思決定をサポートする優秀なデータアナリストです。           
-    以下の依頼内容の意図をよく考え、依頼内容を実現するための具体的なステップに細分化してください。
-    # 依頼内容
-    {user_prompt}
+    plan_prompt_text = f"""
+あなたは経営者の意思決定をサポートする優秀なデータアナリストです。           
+以下の依頼内容の意図をよく考え、依頼内容を実現するための具体的なステップに細分化してください。
+# 依頼内容
+{user_prompt}
 
-    # データの概要
-    {df_overview}
+# データの概要
+{df_overview}
 
-    # 手順
-    1. 依頼内容を理解する。背景にあるニーズも含めて理解する。
-    2. データの概要を確認する
-    3. 依頼内容に回答するためにどのような分析やデータ可視化を行うか検討する。データ可視化は必要最小限のダッシュボードが望ましく、フィルタやしきい値設定ができるようにインタラクティブな操作ができるようにする。
-    4. 依頼内容を実現するためにprepare(複数可)、visualize(複数可)、report(1つのみ)の3ステップのタスクに細分化する
-    5. 細分化された各タスクについて以下の内容を回答する
-        - category(prepare/visualize/report)
-        - task(与えられたdfをインプットにどのような加工または分析をするか具体的かつ詳細に明記)
-        - input(複数ある場合はリスト)
-        - output(df_から始まる単一のdataframe名※visualizeとreportの場合はスペース)
-        - output_columns(出力するカラムのリスト※可能な限りinputのカラムを残す※出力データフレームがある場合のみ)
-    6. prepareのタスクは、visualizeとreportのタスクに必要な各dataframeごとに細分化してください。(1タスク1つのdataframeをoutputとして持つ)
-    7. prepareのタスクは、各dataframeをインプットにpythonで実施できる分析内容にしてください。
-        """
+# 手順
+1. 依頼内容を理解する。背景にあるニーズも含めて理解する。
+2. データの概要を確認する
+3. 依頼内容に回答するためにどのような分析やデータ可視化を行うか検討する。データ可視化は必要最小限のダッシュボードが望ましく、フィルタやしきい値設定ができるようにインタラクティブな操作ができるようにする。
+4. 依頼内容を実現するためにprepare(複数可)、visualize(複数可)、report(1つのみ)の3ステップのタスクに細分化する
+5. 細分化された各タスクについて以下の内容を回答する
+    - category(prepare/visualize/report)
+    - task(与えられたdfをインプットにどのような加工または分析をするか具体的かつ詳細に明記)
+    - input(複数ある場合はリスト)
+    - output(df_から始まる単一のdataframe名※visualizeとreportの場合はスペース)
+    - output_columns(出力するカラムのリスト※可能な限りinputのカラムを残す※出力データフレームがある場合のみ)
+6. prepareのタスクは、visualizeとreportのタスクに必要な各dataframeごとに細分化してください。(1タスク1つのdataframeをoutputとして持つ)
+7. prepareのタスクは、各dataframeをインプットにpythonで実施できる分析内容にしてください。
+    """
 
-        plan_prompt = PromptTemplate.from_template("{input}")
-        plan_llm = ChatOpenAI(
-            model="gpt-4.1",
-            temperature=0,
-            api_key=get_llm_client().api_key,
-            verbose=True,
-        ).with_structured_output(ResponseFormatter)
+    plan_prompt = PromptTemplate.from_template("{input}")
+    plan_llm = ChatOpenAI(
+        model="gpt-4.1",
+        temperature=0,
+        api_key=get_llm_client().api_key,
+        verbose=True,
+    ).with_structured_output(ResponseFormatter)
 
-        plan_chain = plan_prompt | plan_llm
-        response_plan = plan_chain.invoke({"input": plan_prompt_text})
-        if isinstance(response_plan, ResponseFormatter):
-            plans = response_plan.plans
-        else:
-            plans = response_plan
+    plan_chain = plan_prompt | plan_llm
+    response_plan = plan_chain.invoke({"input": plan_prompt_text})
+    if isinstance(response_plan, ResponseFormatter):
+        plans = response_plan.plans
+    else:
+        plans = response_plan
 
-        plan_df = pd.DataFrame([p.model_dump() if isinstance(p, Plan) else p for p in plans])
-        plan_df["status"] = "⬜"
-        plan_df = plan_df.reindex(
-            columns=["category", "status", "task", "input", "output", "output_columns"]
-        )
+    plan_df = pd.DataFrame([p.model_dump() if isinstance(p, Plan) else p for p in plans])
+    plan_df["status"] = "⬜"
+    plan_df = plan_df.reindex(
+        columns=["category", "status", "task", "input", "output", "output_columns"]
+    )
 
-        st.session_state.plan = plan_df
-
-    # ---------------- 表示プレースホルダ ----------------
-    # st.session_state.plan_placeholder = st.empty()
-    # st.session_state.plan_placeholder.dataframe(plan_df, use_container_width=True)
-    
+    st.session_state.plan = plan_df
     # state 更新
     state["plan_df"] = plan_df
     return state
@@ -915,7 +954,7 @@ def main(initial_df_dict: Dict[str, pd.DataFrame]):
         generate_plan_button = st.button(
             "タスク生成", 
             type="primary",
-            disabled=not st.session_state.get("api_key") # APIキーがない場合は無効化
+            disabled=not st.session_state.get("api_key") or st.session_state.app_status not in ["initial", "plan_generated", "completed"]
         )
 
     if generate_plan_button:
@@ -930,44 +969,117 @@ def main(initial_df_dict: Dict[str, pd.DataFrame]):
         st.session_state.generated_codes = []
         st.session_state.generated_report = ""
         st.session_state.refined_prompt = ""
+        st.session_state.clarification_history = []
         st.session_state.conversation_context = ConversationContext()
         st.session_state.user_prompt = user_prompt
         st.session_state.app_status = "planning" # ステータスを計画中に
 
-        llm_client = get_llm_client()
-        if llm_client is None:
-            st.error("API Key を入力してください")
-            st.session_state.app_status = "initial"
-            st.stop()
-
-        df_overview = get_dataframe_info(
-            [{"input_name": n, "input_df": df} for n, df in st.session_state.initial_df_dict.items()]
-        )
-
-        # 計画フローの実行
-        # with st.spinner("タスクを生成しています..."):
-        try:
-            plan_flow = build_plan_flow()
-            state = {"user_prompt": user_prompt, "df_overview": df_overview}
-            plan_flow.invoke(state)
-            st.session_state.app_status = "plan_generated"
-        except Exception as e:
-            st.exception(e)
-            logger.exception("plan_flow.invoke 失敗")
-            st.session_state.app_status = "initial"
-        
         st.rerun()
 
     # ------------------------------------------------------------------
-    # 2. プラン確認・編集フェーズ
+    # 2. 依頼詳細化フェーズ (対話ループ)
+    # ------------------------------------------------------------------
+    if st.session_state.app_status == "planning":
+        st.markdown("---")
+        st.markdown("<h4 class='section-header'>依頼内容の確認</h4>", unsafe_allow_html=True)
+
+        if st.session_state.clarification_history:
+            with st.expander("対話履歴", expanded=False):
+                for message in st.session_state.clarification_history:
+                    with st.chat_message(message["role"]):
+                        st.markdown(message["content"], unsafe_allow_html=True)
+
+        # 対話履歴の表示
+        if len(st.session_state.clarification_history) == 0:
+            pass
+        elif st.session_state.clarification_history[-1]["role"] == "assistant":
+            with st.chat_message("assistant"):
+                st.markdown(st.session_state.clarification_history[-1]["content"], unsafe_allow_html=True)
+        else:
+            with st.chat_message("assistant"):
+                st.markdown(st.session_state.clarification_history[-2]["content"], unsafe_allow_html=True)
+            with st.chat_message("user"):
+                st.markdown(st.session_state.clarification_history[-1]["content"], unsafe_allow_html=True)
+
+        # LLMを呼び出すべきか判断 (初回またはユーザー返信後)
+        with st.spinner("確認中..."):
+            should_run_refine = not st.session_state.clarification_history or st.session_state.clarification_history[-1]["role"] == "user"
+
+            if should_run_refine:
+                # with st.spinner("依頼内容を分析・詳細化しています..."):
+                state = {
+                    "user_prompt": st.session_state.user_prompt,
+                    "clarification_history": st.session_state.clarification_history
+                }
+                
+                try:
+                    result_state = refine_prompt_node(state)
+                    
+                    if result_state.get("need_clarification"):
+                        questions = result_state.get("questions", [])
+                        if questions:
+                            st.session_state.clarification_history.append({"role": "assistant", "content": "\n".join(f"{q}" for q in questions)})
+                        st.rerun()
+                    else:
+                        st.session_state.refined_prompt = result_state.get("refined_prompt")
+                        st.session_state.app_status = "plan_generating" # 次のステップへ
+                        st.rerun()
+
+                except Exception as e:
+                    st.exception(e)
+                    logger.exception("refine_prompt_node 失敗")
+                    st.session_state.app_status = "initial"
+                    # st.rerun()
+
+        # ユーザーからの回答を待つ
+        if st.session_state.clarification_history and st.session_state.clarification_history[-1]["role"] == "assistant":
+            if user_reply := st.chat_input("回答を入力してください"):
+                st.session_state.clarification_history.append({"role": "user", "content": user_reply})
+                st.rerun()
+
+    # ------------------------------------------------------------------
+    # 2.5 プラン生成フェーズ
+    # ------------------------------------------------------------------
+    if st.session_state.app_status == "plan_generating":
+        with st.spinner("タスクを生成しています..."):
+            try:
+                sleep(.1) 
+                df_overview = get_dataframe_info(
+                    [{"input_name": n, "input_df": df} for n, df in st.session_state.initial_df_dict.items()]
+                )
+                state = {
+                    "user_prompt": st.session_state.user_prompt,
+                    "refined_prompt": st.session_state.refined_prompt,
+                    "df_overview": df_overview
+                }
+                # generate_plan_nodeはUIを操作するため、メインスレッドで実行
+                generate_plan_node(state)
+                st.session_state.app_status = "plan_generated"
+                st.rerun()
+            except Exception as e:
+                st.exception(e)
+                logger.exception("generate_plan_node 失敗")
+                st.session_state.app_status = "initial"
+                # st.rerun()
+
+    # ------------------------------------------------------------------
+    # 3. プラン確認・編集フェーズ
     # ------------------------------------------------------------------
     if st.session_state.app_status == "plan_generated":
-        st.markdown("---")
-        st.markdown("### タスク一覧")
+        # st.markdown("---")
+        st.markdown("<h3 class='section-header'>タスク一覧</h3>", unsafe_allow_html=True)
+
         st.info("以下のタスクを確認し、必要に応じてタスクの追加・削除・編集を行ってください。問題がなければ「タスク実行」ボタンを押してください。")
         
+        # 対話履歴をコンテキストとして表示
+        if st.session_state.get("clarification_history"):
+            with st.expander("依頼内容の確認履歴", expanded=False):
+                for message in st.session_state.clarification_history:
+                    with st.chat_message(message["role"]):
+                        st.markdown(message["content"], unsafe_allow_html=True)
+
         if st.session_state.get("refined_prompt"):
-            with st.expander("タスク方針", expanded=False):
+            with st.expander("詳細化された依頼内容", expanded=False):
                 st.markdown(st.session_state.refined_prompt, unsafe_allow_html=True)
         
         # data_editorでプランを編集可能にする
@@ -988,13 +1100,19 @@ def main(initial_df_dict: Dict[str, pd.DataFrame]):
             key="plan_editor"
         )
         
-        if st.button("タスク実行", type="primary"):
-            st.session_state.plan = edited_plan_df # 実行前に最新の編集内容を保存
-            st.session_state.app_status = "executing"
-            st.rerun()
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("タスク実行", type="primary"):
+                st.session_state.plan = edited_plan_df # 実行前に最新の編集内容を保存
+                st.session_state.app_status = "executing"
+                st.rerun()
+        with col2:
+            if st.button("最初からやり直す"):
+                st.session_state.app_status = "initial"
+                st.rerun()
 
     # ------------------------------------------------------------------
-    # 3. 実行フェーズ & 4. 結果表示・チャットフェーズ
+    # 4. 実行フェーズ & 5. 結果表示・チャットフェーズ
     # ------------------------------------------------------------------
     if st.session_state.app_status in ["executing", "completed"]:
         st.markdown("---")
@@ -1022,6 +1140,8 @@ def main(initial_df_dict: Dict[str, pd.DataFrame]):
             context.prepare_results = st.session_state.get("work_df_dict")
             context.visualize_results = st.session_state.get("generated_codes")
             context.report = "\n".join(st.session_state.get("generated_report", []))
+            # 対話履歴もコンテキストに追加
+            context.chat_history.extend(st.session_state.clarification_history)
 
             st.session_state.app_status = "completed"
             st.success("分析が完了しました。")
@@ -1031,13 +1151,13 @@ def main(initial_df_dict: Dict[str, pd.DataFrame]):
             st.exception(e)
             logger.exception("execution_flow.invoke 失敗")
             st.session_state.app_status = "plan_generated" # 失敗したらプラン編集画面に戻す
-            st.rerun()
+            # st.rerun()
 
     if st.session_state.app_status == "completed":
         # 生成データ
         if st.session_state.get("work_df_dict"):
             st.markdown('<h3 class="section-header">データ</h3>', unsafe_allow_html=True)
-            with st.expander("生成されたデータ", expanded=True):
+            with st.expander("生成されたデータ", expanded=False):
                 tabs = st.tabs(list(st.session_state.work_df_dict.keys()))
                 for idx, (df_name, df_val) in enumerate(st.session_state.work_df_dict.items()):
                     with tabs[idx]:
@@ -1049,7 +1169,7 @@ def main(initial_df_dict: Dict[str, pd.DataFrame]):
         # ビジュアル再描画
         if st.session_state.get("generated_codes"):
             st.markdown('<h3 class="section-header">ビジュアル</h3>', unsafe_allow_html=True)
-            with st.expander("生成されたビジュアル", expanded=True):
+            with st.expander("生成されたビジュアル", expanded=False):
                 vis_tabs = st.tabs([f"visual_{i+1}" for i in range(len(st.session_state.generated_codes))])
                 for idx, gen_code_info in enumerate(st.session_state.generated_codes):
                     with vis_tabs[idx]:

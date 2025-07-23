@@ -21,6 +21,7 @@ st.markdown("""
         font-weight: bold;
         color: #1f77b4;
         text-align: left;
+        margin-top: -5rem !important; /* 上の余白を負の値で詰める */
         margin-bottom: 2rem;
     }
     .section-header {
